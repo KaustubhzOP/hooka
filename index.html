@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Virtual Hookah</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫧</text></svg>" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="logo">🫧</span>
+        <span class="name">Virtual Hookah</span>
+        <span class="privacy" title="Face and hand tracking run in your browser with WebAssembly. Nothing is uploaded.">🔒 Runs locally · no video leaves your device</span>
+      </div>
+      <div class="actions">
+        <button id="startBtn" class="primary">Start camera</button>
+        <button id="calBtn" disabled title="Guided 2-step lip calibration">Calibrate <kbd>C</kbd></button>
+        <button id="testBtn" title="Blow a test puff (works without a camera)">Test smoke <kbd>T</kbd></button>
+        <button id="muteBtn" title="Mute / unmute (M)">🔊 <kbd>M</kbd></button>
+        <button id="debugBtn" title="Debug panel (D)">Debug <kbd>D</kbd></button>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="stageWrap" id="stageWrap">
+        <div id="stage">
+          <video id="video" playsinline muted></video>
+          <canvas id="smokeCanvas"></canvas>
+          <canvas id="fxCanvas"></canvas>
+          <div id="badge" class="badge st-IDLE"><i></i><span>IDLE</span></div>
+          <div id="fps" class="fps"></div>
+          <div id="hint" class="hint"></div>
+          <div id="calCard" class="calCard" hidden>
+            <div class="calStep" id="calStep">Step 1 of 2</div>
+            <div class="calText" id="calText"></div>
+            <div class="calBar"><i id="calBar"></i></div>
+          </div>
+          <div id="card" class="card">
+            <h1>Virtual Hookah</h1>
+            <p class="lead">Hold a real pen like a hookah mouthpiece. Your lips and hand drive a virtual inhale → hold → exhale, with smoke.</p>
+            <ol class="steps">
+              <li><b>Bring the pen to your lips</b> and purse them, like sipping through it, to inhale.</li>
+              <li><b>Relax your lips</b> (or pull the pen away) to hold it in.</li>
+              <li><b>Purse your lips again</b> to blow the smoke out. Hold too long and you'll cough.</li>
+            </ol>
+            <div class="cardActions"><button id="cardStart" class="primary big">Start camera</button></div>
+            <p class="fine">🔒 Tracking runs entirely in your browser. No video or images leave your device.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel" id="panel">
+        <section>
+          <h2>Smoke</h2>
+          <div id="presets" class="presets"></div>
+          <div class="row">
+            <label class="chk"><input type="checkbox" id="customChk" /> Custom colour</label>
+            <input type="color" id="customColor" value="#9fd8ff" />
+          </div>
+          <div id="smokeSliders"></div>
+        </section>
+        <section>
+          <h2>Grip</h2>
+          <label class="chk"><input type="checkbox" id="pinchChk" /> Require a pinch grip (thumb + index on the pen)</label>
+        </section>
+        <section>
+          <h2>Tips</h2>
+          <ul class="tips">
+            <li>Run <b>Calibrate</b> (<kbd>C</kbd>) once: it learns how pursed your lips look.</li>
+            <li>Face the camera with good, even light. Keep your hand in view.</li>
+            <li>Open the mouth wide while holding and the smoke leaks out.</li>
+            <li>Keys: <kbd>1</kbd>–<kbd>5</kbd> smoke · <kbd>R</kbd> reset · <kbd>L</kbd> landmarks</li>
+          </ul>
+        </section>
+      </aside>
+
+      <aside class="panel debug" id="debug" hidden>
+        <section>
+          <h2>State</h2>
+          <div id="meters"></div>
+        </section>
+        <section>
+          <h2>Signals <span class="dim" id="fpsLine"></span></h2>
+          <div id="signals"></div>
+          <label class="chk"><input type="checkbox" id="lmChk" /> Draw landmarks overlay <kbd>L</kbd></label>
+        </section>
+        <section>
+          <h2>Thresholds</h2>
+          <div id="thresholds"></div>
+          <div class="row">
+            <button id="resetBtn" title="Reset the state machine (R)">Reset state <kbd>R</kbd></button>
+            <button id="defaultsBtn" title="Restore default thresholds">Default thresholds</button>
+          </div>
+        </section>
+        <section>
+          <h2>Event log</h2>
+          <div id="log" class="log"></div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="foot">
+      <span>Just for fun, no smoking involved. A camera toy: no tobacco, no real smoke, just pixels.</span>
+      <span class="dim">Face &amp; hand tracking by MediaPipe, on-device.</span>
+    </footer>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

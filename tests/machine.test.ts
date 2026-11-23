@@ -1,0 +1,179 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { Machine, DEFAULT_MACHINE_CONFIG, type MachineEvent, type MachineInput, type MachineConfig } from '../src/machine';
+
+const DT = 1 / 60;
+const PURSED = 0.6;      // well above blowOn (0.35)
+const RELAXED = 0.05;    // well below blowOn * 0.6
+const neutral: MachineInput = { blow: RELAXED, jaw: 0, penNear: false, pinchOk: false };
+
+let events: MachineEvent[];
+let m: Machine;
+
+function make(over: Partial<MachineConfig> = {}) {
+  events = [];
+  m = new Machine({ ...DEFAULT_MACHINE_CONFIG, ...over }, e => events.push(e));
+}
+
+/** Run the machine for `seconds` with a fixed input. */
+function run(seconds: number, input: Partial<MachineInput>) {
+  const n = Math.round(seconds / DT);
+  for (let i = 0; i < n; i++) m.step(DT, { ...neutral, ...input });
+}
+
+const transitions = () => events.filter(e => e.type === 'transition').map(e => (e as { to: string }).to);
+const exhales = () => events.flatMap(e => (e.type === 'exhale' ? [e.exhale] : []));
+
+/** pen at lips + pursed for `inhale` seconds, then relax with the pen still there. */
+function inhaleThenHold(inhale = 2) {
+  run(inhale, { penNear: true, blow: PURSED });
+  run(0.4, { penNear: true, blow: RELAXED });
+}
+
+beforeEach(() => make());
+
+describe('Machine', () => {
+  it('starts idle', () => {
+    expect(m.state).toBe('IDLE');
+  });
+
+  it('does nothing when blowing without the pen', () => {
+    run(3, { blow: PURSED, penNear: false });
+    expect(m.state).toBe('IDLE');
+    expect(events).toHaveLength(0);
+  });
+
+  it('does nothing when the pen is at the lips but the lips are relaxed', () => {
+    run(3, { penNear: true, blow: RELAXED });
+    expect(m.state).toBe('IDLE');
+  });
+
+  it('needs the lips pursed for at least onDelay (120 ms) before inhaling', () => {
+    run(0.08, { penNear: true, blow: PURSED });
+    expect(m.state).toBe('IDLE');
+    run(0.06, { penNear: true, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+  });
+
+  it('runs the normal inhale → hold → exhale → idle flow', () => {
+    run(2, { penNear: true, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+    expect(m.charge).toBeGreaterThan(1.7);
+
+    run(0.4, { penNear: true, blow: RELAXED });            // relax lips ≥ 250 ms
+    expect(m.state).toBe('HOLDING');
+    const charge = m.charge;
+
+    run(1, { penNear: false, blow: RELAXED });             // hold, pen away, mouth closed
+    expect(m.state).toBe('HOLDING');
+
+    run(0.2, { penNear: false, blow: PURSED });            // blow
+    expect(m.state).toBe('EXHALING');
+    const [ex] = exhales();
+    expect(ex.kind).toBe('blow');
+    expect(ex.duration).toBeCloseTo(1.0 + 0.6 * charge, 5);
+    expect(ex.strength).toBeGreaterThan(0.3);
+
+    run(ex.duration + 0.05, { blow: PURSED });
+    expect(m.state).toBe('IDLE');
+    expect(m.charge).toBe(0);
+    expect(transitions()).toEqual(['INHALING', 'HOLDING', 'EXHALING', 'IDLE']);
+  });
+
+  it('caps the inhale charge at maxInhale', () => {
+    run(7, { penNear: true, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+    expect(m.charge).toBeCloseTo(DEFAULT_MACHINE_CONFIG.maxInhale, 5);
+  });
+
+  it('ends the inhale when the pen is pulled away for ≥ 350 ms', () => {
+    run(1.5, { penNear: true, blow: PURSED });
+    run(0.3, { penNear: false, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+    run(0.1, { penNear: false, blow: PURSED });
+    expect(m.state).toBe('HOLDING');
+  });
+
+  it('rejects a short inhale and goes back to IDLE', () => {
+    run(0.3, { penNear: true, blow: PURSED });               // 0.12 s to start, ~0.18 s of charge
+    expect(m.state).toBe('INHALING');
+    run(0.4, { penNear: true, blow: RELAXED });
+    expect(m.state).toBe('IDLE');
+    expect(events.some(e => e.type === 'inhaleRejected')).toBe(true);
+    expect(exhales()).toHaveLength(0);
+  });
+
+  it('does not exhale on a lingering pucker after the pen is pulled away', () => {
+    run(2, { penNear: true, blow: PURSED });
+    run(0.5, { penNear: false, blow: PURSED });              // pen away, lips still pursed
+    expect(m.state).toBe('HOLDING');
+    run(2, { penNear: false, blow: PURSED });                // pucker lingers: must not count as a blow
+    expect(m.state).toBe('HOLDING');
+    expect(exhales()).toHaveLength(0);
+
+    run(0.2, { blow: RELAXED });                             // relax once…
+    run(0.2, { blow: PURSED });                              // …then a real blow
+    expect(m.state).toBe('EXHALING');
+    expect(exhales()[0].kind).toBe('blow');
+  });
+
+  it('coughs the smoke out after maxHold seconds', () => {
+    inhaleThenHold();
+    expect(m.state).toBe('HOLDING');
+    run(DEFAULT_MACHINE_CONFIG.maxHold - 0.6, { blow: RELAXED });
+    expect(m.state).toBe('HOLDING');
+    run(0.5, { blow: RELAXED });
+    expect(m.state).toBe('EXHALING');
+    expect(exhales()[0].kind).toBe('cough');
+  });
+
+  it('leaks a short, weak exhale when the jaw opens wide without blowing', () => {
+    inhaleThenHold();
+    run(0.25, { blow: RELAXED, jaw: 0.7 });
+    expect(m.state).toBe('HOLDING');
+    run(0.15, { blow: RELAXED, jaw: 0.7 });
+    expect(m.state).toBe('EXHALING');
+    const ex = exhales()[0];
+    expect(ex.kind).toBe('leak');
+    expect(ex.strength).toBeLessThanOrEqual(0.4);
+    expect(ex.duration).toBeLessThan(1);
+  });
+
+  it('does not leak when the jaw opens only a little', () => {
+    inhaleThenHold();
+    run(2, { blow: RELAXED, jaw: 0.3 });
+    expect(m.state).toBe('HOLDING');
+  });
+
+  it('blocks the inhale without a pinch grip when requirePinch is on', () => {
+    make({ requirePinch: true });
+    run(2, { penNear: true, pinchOk: false, blow: PURSED });
+    expect(m.state).toBe('IDLE');
+    run(0.3, { penNear: true, pinchOk: true, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+  });
+
+  it('applies a cooldown after an exhale before a new inhale can start', () => {
+    m.forceExhale('test', 0.9, 0);
+    run(1.05, { blow: RELAXED });
+    expect(m.state).toBe('IDLE');
+    run(0.5, { penNear: true, blow: PURSED });               // still cooling down (0.8 s)
+    expect(m.state).toBe('IDLE');
+    run(0.5, { penNear: true, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+  });
+
+  it('uses hysteresis: a score between 0.6× and 1× the threshold keeps the current lip state', () => {
+    run(1, { penNear: true, blow: PURSED });
+    expect(m.state).toBe('INHALING');
+    run(1, { penNear: true, blow: 0.3 });                    // 0.21 < 0.3 < 0.35: still pursed
+    expect(m.state).toBe('INHALING');
+    run(0.3, { penNear: true, blow: 0.15 });                 // below 0.21: relaxed
+    expect(m.state).toBe('HOLDING');
+  });
+
+  it('forceExhale works from IDLE (test smoke)', () => {
+    m.forceExhale();
+    expect(m.state).toBe('EXHALING');
+    expect(exhales()[0].kind).toBe('test');
+  });
+});
