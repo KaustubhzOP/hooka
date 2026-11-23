@@ -43,8 +43,10 @@ export interface Signals {
   jaw: number;
   close: number;
   cheek: number;
+  sneer: number;       // max(noseSneerLeft, noseSneerRight): "scrunch your nose"
   faceVisible: boolean;
   mouth: Pt | null;    // last-known mouth position (kept ~1.5 s after the face drops)
+  nostrils: [Pt, Pt] | null;  // last-known nostril openings, kept like the mouth
   faceW: number;       // face width in pixels (234 ↔ 454)
   aim: Pt;             // where the face points, roughly (unit-ish, for smoke direction)
   pen: PenEstimate | null;
@@ -55,6 +57,7 @@ export interface Signals {
 // Landmark indices
 export const LM = {
   upperLipInner: 13, lowerLipInner: 14, faceLeft: 234, faceRight: 454, noseTip: 1,
+  nostrilLeft: 98, nostrilRight: 327, subnasale: 2,
   wrist: 0, thumbTip: 4, indexMcp: 5, indexTip: 8, middleMcp: 9
 } as const;
 
@@ -71,6 +74,13 @@ export const toScreen = (l: Landmark, W: number, H: number): Pt => ({ x: (1 - l.
 export function mouthCenter(lm: Landmark[], W: number, H: number): Pt {
   const a = toScreen(lm[LM.upperLipInner], W, H), b = toScreen(lm[LM.lowerLipInner], W, H);
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+/** The two nostril openings: the alar points pulled a little towards the base of the nose. */
+export function nostrils(lm: Landmark[], W: number, H: number): [Pt, Pt] {
+  const c = toScreen(lm[LM.subnasale], W, H);
+  const at = (i: number) => { const p = toScreen(lm[i], W, H); return { x: p.x + (c.x - p.x) * 0.35, y: p.y + (c.y - p.y) * 0.35 }; };
+  return [at(LM.nostrilLeft), at(LM.nostrilRight)];
 }
 
 export function faceWidth(lm: Landmark[], W: number, H: number): number {
@@ -113,12 +123,13 @@ export class SignalProcessor {
   private penLatched = false;
   private bs: Record<string, number> = {};
   private mouth: Pt | null = null;
+  private nose: [Pt, Pt] | null = null;
   private faceW = 0;
   private aim: Pt = { x: 0, y: 0.15 };
 
   reset(): void {
     this.smoothBlow = 0; this.lastT = null; this.lastFaceT = -Infinity; this.lastPenNearT = -Infinity;
-    this.penLatched = false; this.bs = {}; this.mouth = null; this.faceW = 0;
+    this.penLatched = false; this.bs = {}; this.mouth = null; this.nose = null; this.faceW = 0;
   }
 
   update(f: TrackingFrame, cfg: SignalConfig): Signals {
@@ -130,6 +141,7 @@ export class SignalProcessor {
       const lm = f.face.landmarks;
       this.lastFaceT = now;
       this.mouth = mouthCenter(lm, W, H);
+      this.nose = nostrils(lm, W, H);
       this.faceW = faceWidth(lm, W, H) || this.faceW;
       const a = faceAim(lm, W, H);
       this.aim = { x: this.aim.x + (a.x - this.aim.x) * 0.3, y: this.aim.y + (a.y - this.aim.y) * 0.3 };
@@ -137,7 +149,7 @@ export class SignalProcessor {
     }
     const faceVisible = now - this.lastFaceT < GRACE_MS;
     const mouthValid = now - this.lastFaceT < MOUTH_MEMORY_MS && this.mouth != null;
-    if (!mouthValid) this.mouth = null;
+    if (!mouthValid) { this.mouth = null; this.nose = null; }
     const bs = faceVisible ? this.bs : {};
 
     const rawBlow = blowScore(bs);
@@ -165,8 +177,10 @@ export class SignalProcessor {
       jaw: bs.jawOpen ?? 0,
       close: bs.mouthClose ?? 0,
       cheek: bs.cheekPuff ?? 0,
+      sneer: Math.max(bs.noseSneerLeft ?? 0, bs.noseSneerRight ?? 0),
       faceVisible,
       mouth: this.mouth,
+      nostrils: this.nose,
       faceW: this.faceW || W * 0.2,
       aim: this.aim,
       pen: best,
@@ -178,7 +192,7 @@ export class SignalProcessor {
 
 export function emptySignals(W = 1280): Signals {
   return {
-    blow: 0, rawBlow: 0, pucker: 0, funnel: 0, jaw: 0, close: 0, cheek: 0, faceVisible: false,
-    mouth: null, faceW: W * 0.2, aim: { x: 0, y: 0.15 }, pen: null, penNear: false, pinchOk: false
+    blow: 0, rawBlow: 0, pucker: 0, funnel: 0, jaw: 0, close: 0, cheek: 0, sneer: 0, faceVisible: false,
+    mouth: null, nostrils: null, faceW: W * 0.2, aim: { x: 0, y: 0.15 }, pen: null, penNear: false, pinchOk: false
   };
 }

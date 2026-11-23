@@ -6,7 +6,7 @@
  */
 
 export type State = 'IDLE' | 'INHALING' | 'HOLDING' | 'EXHALING';
-export type ExhaleKind = 'blow' | 'leak' | 'cough' | 'test';
+export type ExhaleKind = 'blow' | 'nose' | 'leak' | 'cough' | 'test';
 
 export interface MachineConfig {
   blowOn: number;          // smoothed blow score at which the lips count as pursed
@@ -24,6 +24,12 @@ export interface MachineConfig {
   cooldown: number;
   exhaleBase: number;      // exhale duration = exhaleBase + exhalePerCharge * charge
   exhalePerCharge: number;
+  ringFunnel: number;      // mouthFunnel at/above this, with the jaw open, is an "O" mouth
+  ringJaw: number;         // jawOpen at/above this (with the funnel) is an "O" mouth
+  ringDelay: number;       // O held this long to puff one ring
+  ringCost: number;        // seconds of inhale charge each ring uses
+  sneerOn: number;         // noseSneer at/above this exhales through the nose
+  sneerDelay: number;
 }
 
 export const DEFAULT_MACHINE_CONFIG: Readonly<MachineConfig> = Object.freeze({
@@ -41,7 +47,13 @@ export const DEFAULT_MACHINE_CONFIG: Readonly<MachineConfig> = Object.freeze({
   leakDelay: 0.35,
   cooldown: 0.8,
   exhaleBase: 1.0,
-  exhalePerCharge: 0.6
+  exhalePerCharge: 0.6,
+  ringFunnel: 0.35,
+  ringJaw: 0.15,
+  ringDelay: 0.1,
+  ringCost: 0.6,
+  sneerOn: 0.35,
+  sneerDelay: 0.15
 });
 
 export interface MachineInput {
@@ -49,6 +61,8 @@ export interface MachineInput {
   jaw: number;       // jawOpen blendshape
   penNear: boolean;  // pen (hand proxy) at the lips, already debounced
   pinchOk: boolean;  // thumb–index grip detected
+  funnel?: number;   // mouthFunnel blendshape ("O" lips), for rings
+  sneer?: number;    // max(noseSneerLeft, noseSneerRight), for the nose exhale
 }
 
 export interface Exhale {
@@ -62,7 +76,8 @@ export interface Exhale {
 export type MachineEvent =
   | { type: 'transition'; from: State; to: State; reason: string }
   | { type: 'inhaleRejected'; charge: number }
-  | { type: 'exhale'; exhale: Exhale };
+  | { type: 'exhale'; exhale: Exhale }
+  | { type: 'ring'; index: number; strength: number; remaining: number };
 
 export class Machine {
   state: State = 'IDLE';
@@ -83,6 +98,11 @@ export class Machine {
   private offT = 0;
   private awayT = 0;
   private openT = 0;
+  private ringArmed = false;  // mouth left the O shape since the last ring
+  private ringT = 0;
+  private sneerT = 0;
+  /** Rings puffed during the current hold. */
+  rings = 0;
 
   constructor(public cfg: MachineConfig, private onEvent: (e: MachineEvent) => void = () => {}) {}
 
@@ -90,6 +110,12 @@ export class Machine {
     this.state = 'IDLE'; this.stateTime = 0; this.charge = 0; this.hold = 0; this.cooldown = 0;
     this.exhale = null; this.pursed = false; this.armed = false;
     this.onT = this.offT = this.awayT = this.openT = 0;
+    this.ringArmed = false; this.ringT = this.sneerT = 0; this.rings = 0;
+  }
+
+  /** Is the mouth in the ring-blowing "O" shape? */
+  isOShape(input: MachineInput): boolean {
+    return (input.funnel ?? 0) >= this.cfg.ringFunnel && input.jaw >= this.cfg.ringJaw;
   }
 
   /** Start an exhale from any state (used by the "Test smoke" button). */
@@ -139,6 +165,7 @@ export class Machine {
           const why = this.offT >= c.releaseDelay ? 'lips relaxed' : 'pen pulled away';
           if (this.charge >= c.minInhale) {
             this.hold = 0; this.armed = false; this.onT = 0; this.openT = 0;
+            this.ringArmed = false; this.ringT = 0; this.sneerT = 0; this.rings = 0;
             this.go('HOLDING', `${why} after ${this.charge.toFixed(1)}s inhale`);
           } else {
             const charge = this.charge;
@@ -152,8 +179,28 @@ export class Machine {
 
       case 'HOLDING': {
         this.hold += dt;
+        const oShape = this.isOShape(input);
         if (!pursed) this.armed = true;            // a lingering pucker must relax before a blow counts
-        if (this.armed && pursed) {
+        if (!oShape) this.ringArmed = true;        // one ring per "O"
+
+        // Smoke rings: an O-shaped mouth (lips funnelled, jaw open) puffs one ring and uses some charge.
+        if (this.armed && this.ringArmed && oShape) {
+          this.ringT += dt;
+          if (this.ringT >= c.ringDelay) {
+            this.ringT = 0; this.ringArmed = false; this.onT = 0;
+            this.charge = Math.max(0, this.charge - c.ringCost);
+            this.rings++;
+            this.onEvent({ type: 'ring', index: this.rings, strength: Math.max(0.4, Math.min(1, (input.funnel ?? 0) * 1.5)), remaining: this.charge });
+            if (this.charge < c.ringCost * 0.5) {
+              this.charge = 0; this.cooldown = c.cooldown;
+              this.go('IDLE', `all smoke used for ${this.rings} ring${this.rings > 1 ? 's' : ''}`);
+            }
+            break;
+          }
+        } else this.ringT = 0;
+
+        // Blow: pursed lips with the mouth (nearly) closed. An O is a ring, not a blow.
+        if (this.armed && pursed && !oShape) {
           this.onT += dt;
           if (this.onT >= c.blowDelay) {
             this.startExhale('blow', input.blow * 1.4, 'blow');
@@ -161,7 +208,14 @@ export class Machine {
           }
         } else this.onT = 0;
 
-        this.openT = input.jaw > c.jawLeak && !pursed ? this.openT + dt : 0;
+        // Nose: scrunch the nose (lips not pursed) to exhale through it.
+        this.sneerT = (input.sneer ?? 0) >= c.sneerOn && !pursed ? this.sneerT + dt : 0;
+        if (this.sneerT >= c.sneerDelay) {
+          this.startExhale('nose', 0.55 + 0.45 * (input.sneer ?? 0), 'nose scrunched → exhale through the nose');
+          break;
+        }
+
+        this.openT = input.jaw > c.jawLeak && !pursed && !oShape ? this.openT + dt : 0;
         if (this.openT >= c.leakDelay) { this.startExhale('leak', 0.4, 'jaw opened → smoke leaked'); break; }
         if (this.hold >= c.maxHold) this.startExhale('cough', 0.75, `held ${c.maxHold.toFixed(1)}s → cough`);
         break;
@@ -184,7 +238,7 @@ export class Machine {
   private startExhale(kind: ExhaleKind, strength: number, reason: string): void {
     const c = this.cfg;
     const full = c.exhaleBase + c.exhalePerCharge * this.charge;
-    const duration = kind === 'leak' ? 0.7 : kind === 'cough' ? Math.max(1.2, full * 0.8) : full;
+    const duration = kind === 'leak' ? 0.7 : kind === 'cough' ? Math.max(1.2, full * 0.8) : kind === 'nose' ? full * 0.9 : full;
     this.exhale = {
       kind, t: 0, duration,
       strength: Math.max(0.3, Math.min(1, strength)),

@@ -45,6 +45,12 @@ Other scripts:
 2. **Relax your lips** (or pull the pen away) to **hold** the smoke. The ring turns amber and counts down.
 3. **Purse your lips again** to **blow** it out. Longer inhales give longer, bigger exhales; the live pucker strength modulates the plume, and turning your head aims it.
 
+Tricks while **holding**:
+
+- **Smoke rings:** make an **"O"** with your mouth (lips rounded and funnelled, jaw open). Each O puffs one ring and uses 0.6 s of your inhale; close your mouth and make another O for the next ring. When the smoke runs out you're back to idle. A plain pursed-lips blow (jaw nearly closed) is still a normal exhale.
+- **Nose exhale ("dragon mode"):** **scrunch your nose** (the `noseSneer` blendshape) to blow the whole hit out through your nostrils.
+- On every normal exhale a little smoke also streams from your nose; the **Nose smoke** slider sets how much (0 turns it off).
+
 Things that go wrong, on purpose:
 
 - **Too short** (< 0.5 s inhale): nothing is stored.
@@ -59,6 +65,8 @@ Things that go wrong, on purpose:
 | `1`–`5` | smoke preset (Classic white, Mint, Grape, Neon pink, Dragon fire) |
 | `C` | calibrate (`Esc` cancels) |
 | `T` | test smoke (works without a camera) |
+| `O` | test smoke ring |
+| `N` | test nose exhale |
 | `R` | reset the state machine and clear smoke |
 | `D` | debug panel |
 | `L` | landmark overlay |
@@ -91,6 +99,9 @@ lips, hands, the estimated pen (grip → tip, green when "near") and its distanc
 | **Pinch max** (`pinchMax`) | 0.5 | "require pinch" rejects your grip | it accepts an open hand |
 | **Max inhale** (s) | 4 | | |
 | **Max hold** (s) | 6 | you cough too soon | |
+| **Ring: funnel** (`ringFunnel`) | 0.35 | rings fire when you just purse your lips | your O doesn't puff rings (watch the funnel bar turn amber) |
+| **Ring: jaw open** (`ringJaw`) | 0.15 | a pursed-lips blow turns into rings | you have to open your mouth very wide for a ring |
+| **Nose: sneer** (`sneerOn`) | 0.35 | the nose exhale fires by accident | scrunching your nose doesn't trigger it |
 
 Fixed timings (in `src/machine.ts`, `DEFAULT_MACHINE_CONFIG`): 120 ms pucker to start / to blow, 250 ms relaxed to
 end the inhale, 350 ms pen-away to end it, min inhale 0.5 s, jaw leak at `jawOpen > 0.45` for 0.35 s, exhale
@@ -134,6 +145,7 @@ within `penNear` face widths of the mouth.
 - **Blendshapes vary by face, lighting and camera.** Calibrate; beards, moustaches, strong backlight or low light make pucker detection noisy.
 - **Occlusion:** a hand or arm covering a large part of the face (e.g. the forehead) can make the face tracker drop out. The 400 ms grace and 1.5 s mouth memory only bridge short gaps.
 - **2D only:** the smoke is a screen-space effect; it doesn't know about depth and won't go behind your head or hand.
+- Rings and the nose exhale are gestures, not real airflow: the camera can't see you push air, so an "O" mouth makes a ring whether or not you actually puff. A quick pursed blow that passes through an O shape on the way can puff a ring instead of exhaling; raise *Ring: jaw open* if that happens.
 - Talking, whistling or kissing faces also produce pucker/funnel scores and can trigger an inhale when the pen is at the lips.
 - The hose attaches at the back of the hand (where a mouthpiece's hose would be) rather than at the pen tip, so it doesn't run into your mouth.
 - Desktop Chrome/Edge only; no mobile layout or touch handling. Safari/Firefox are untested.

@@ -23,7 +23,8 @@ const settings: Settings = loadSettings(storage);
 const machineConfig = (): MachineConfig => ({
   ...DEFAULT_MACHINE_CONFIG,
   blowOn: settings.blowOn, requirePinch: settings.requirePinch,
-  maxInhale: settings.maxInhale, maxHold: settings.maxHold
+  maxInhale: settings.maxInhale, maxHold: settings.maxHold,
+  ringFunnel: settings.ringFunnel, ringJaw: settings.ringJaw, sneerOn: settings.sneerOn
 });
 
 const video = $<HTMLVideoElement>('video');
@@ -44,7 +45,7 @@ let running = false, starting = false;
 let sig: Signals = emptySignals(W);
 let lastFrame: TrackingFrame | null = null;
 let flash = { text: '', until: 0 };
-let emitAcc = 0, glow = 0;
+let emitAcc = 0, noseAcc = 0, noseSide = 0, glow = 0;
 
 /* --------------------------------------------------------------------- UI */
 let saveTimer = 0;
@@ -65,7 +66,7 @@ const ui: UI = new UI(settings, {
   toggleMute: () => change('muted', !settings.muted),
   toggleDebug: () => change('debugOpen', !settings.debugOpen),
   restoreDefaults: () => {
-    for (const k of ['blowOn', 'penNear', 'penExt', 'pinchMax', 'maxInhale', 'maxHold', 'requirePinch'] as const)
+    for (const k of ['blowOn', 'penNear', 'penExt', 'pinchMax', 'maxInhale', 'maxHold', 'requirePinch', 'ringFunnel', 'ringJaw', 'sneerOn'] as const)
       (settings as unknown as Record<string, unknown>)[k] = DEFAULT_SETTINGS[k];
     machine.cfg = machineConfig();
     ui.syncSettings(); persist();
@@ -78,6 +79,7 @@ function change<K extends keyof Settings>(key: K, value: Settings[K]) {
   settings[key] = value;
   switch (key) {
     case 'blowOn': case 'requirePinch': case 'maxInhale': case 'maxHold':
+    case 'ringFunnel': case 'ringJaw': case 'sneerOn':
       machine.cfg = machineConfig(); break;
     case 'smokePreset': case 'useCustomColor': case 'customColor':
       applySmokePreset();
@@ -106,11 +108,44 @@ function onMachineEvent(e: MachineEvent) {
       const x = e.exhale;
       ui.log(`exhale: ${x.kind}, ${x.duration.toFixed(1)}s, strength ${x.strength.toFixed(2)}`);
       if (x.kind === 'cough') { audio.cough(); flashHint('*cough cough* — you held it too long!', 2000); }
+      if (x.kind === 'nose') flashHint('Dragon mode: smoke through the nose 🐉', 1800);
       if (x.kind === 'leak') flashHint('Oops, it leaked out — keep your mouth closed while holding.', 2200);
+      break;
+    }
+    case 'ring': {
+      puffRing(e.strength);
+      ui.log(`ring #${e.index} (strength ${e.strength.toFixed(2)}, ${e.remaining.toFixed(1)}s of smoke left)`);
+      flashHint(e.index === 1 ? 'Smoke ring! Close your mouth and make another “O”…' : `${e.index} rings! ◯`, 1500);
       break;
     }
   }
 }
+
+function puffRing(strength: number) {
+  const g = faceGeometry();
+  smoke?.emitRing({
+    x: g.mouth.x, y: g.mouth.y,
+    dirX: g.aim.x * 3, dirY: -0.55,
+    speed: (45 + 45 * strength) * g.scale * settings.speed,
+    radius: 0.13 * g.faceW, expand: 24 * g.scale * settings.spread,
+    scale: g.scale, strength
+  });
+  audio.ringPuff(strength);
+}
+
+/** Mouth, nostrils, face size and head direction, with sensible fallbacks when no face is tracked (test smoke). */
+function faceGeometry() {
+  const tracked = !!sig.mouth;
+  const mouth: Pt = sig.mouth ?? { x: W * 0.5, y: H * 0.6 };
+  const faceW = tracked ? sig.faceW : W * 0.2;
+  const nostrils: [Pt, Pt] = sig.nostrils ?? [
+    { x: mouth.x - 0.07 * faceW, y: mouth.y - 0.17 * faceW },
+    { x: mouth.x + 0.07 * faceW, y: mouth.y - 0.17 * faceW }
+  ];
+  const aim = running && tracked ? sig.aim : { x: 0, y: 0.15 };
+  return { mouth, faceW, scale: faceW / 300, nostrils, aim };
+}
+
 const machine = new Machine(machineConfig(), onMachineEvent);
 
 /* ----------------------------------------------------------------- layout */
@@ -242,9 +277,8 @@ if (import.meta.env.DEV) Object.assign(window, { __hookah: { machine, audio, set
   else machine.step(dt, sig);
 
   // 3. smoke emission
-  const mouth: Pt = sig.mouth ?? { x: W * 0.5, y: H * 0.6 };
-  const faceW = sig.mouth ? sig.faceW : W * 0.2;
-  const scale = faceW / 300;
+  const geo = faceGeometry();
+  const { mouth, faceW, scale } = geo;
   let whoosh = 0;
   const ex = machine.exhale;
   if (machine.state === 'EXHALING' && ex && smoke) {
@@ -254,21 +288,46 @@ if (import.meta.env.DEV) Object.assign(window, { __hookah: { machine, audio, set
     const live = running && ex.kind === 'blow' && sig.faceVisible
       ? 0.55 + 0.45 * clamp(sig.blow / Math.max(0.05, settings.blowOn * 1.5), 0, 1) : 1;
     const strength = ex.strength * env * pulse;
-    emitAcc += dt * 90 * settings.density * strength * live;
-    const n = Math.floor(emitAcc); emitAcc -= n;
-    // Head turned → a narrower jet towards that side; facing the camera → a wide puff.
-    const aim = running && sig.mouth ? sig.aim : { x: 0, y: 0.15 };
-    const jet = clamp(Math.abs(aim.x) * 4, 0, 1);
-    const kindSpread = ex.kind === 'leak' ? 1.6 : ex.kind === 'cough' ? 1.3 : 1;
-    if (n > 0) smoke.emit(n, {
-      x: mouth.x, y: mouth.y + 4 * scale,
-      dirX: aim.x * 4, dirY: 0.55 + aim.y,
-      speed: (70 + 170 * ex.strength) * scale * settings.speed * (0.7 + 0.6 * jet) * (ex.kind === 'leak' ? 0.5 : 1),
-      spread: Math.min(Math.PI * 1.9, settings.spread * (2.2 - 1.1 * jet) * kindSpread),
-      scale, strength: clamp(0.35 + 0.65 * ex.strength * env, 0, 1)
-    });
-    whoosh = clamp(strength * live * (ex.kind === 'cough' ? 0.6 : 1), 0, 1);
-  } else emitAcc = 0;
+    const puffStrength = clamp(0.35 + 0.65 * ex.strength * env, 0, 1);
+
+    // mouth plume (not for a pure nose exhale)
+    if (ex.kind !== 'nose') {
+      emitAcc += dt * 90 * settings.density * strength * live;
+      const n = Math.floor(emitAcc); emitAcc -= n;
+      // Head turned → a narrower jet towards that side; facing the camera → a wide puff.
+      const jet = clamp(Math.abs(geo.aim.x) * 4, 0, 1);
+      const kindSpread = ex.kind === 'leak' ? 1.6 : ex.kind === 'cough' ? 1.3 : 1;
+      if (n > 0) smoke.emit(n, {
+        x: mouth.x, y: mouth.y + 4 * scale,
+        dirX: geo.aim.x * 4, dirY: 0.55 + geo.aim.y,
+        speed: (70 + 170 * ex.strength) * scale * settings.speed * (0.7 + 0.6 * jet) * (ex.kind === 'leak' ? 0.5 : 1),
+        spread: Math.min(Math.PI * 1.9, settings.spread * (2.2 - 1.1 * jet) * kindSpread),
+        scale, strength: puffStrength
+      });
+    }
+
+    // nose streams: all of a nose exhale, or a share of a normal blow
+    const noseShare = ex.kind === 'nose' ? 1 : (ex.kind === 'blow' || ex.kind === 'test') ? settings.noseSmoke : 0;
+    if (noseShare > 0) {
+      noseAcc += dt * (ex.kind === 'nose' ? 55 : 30) * noseShare * settings.density * strength;
+      const n = Math.floor(noseAcc); noseAcc -= n;
+      const cx = (geo.nostrils[0].x + geo.nostrils[1].x) / 2;
+      for (let k = 0; k < n; k++) {
+        const side = noseSide++ & 1;                     // alternate nostrils across frames
+        const nos = geo.nostrils[side];
+        const out = Math.sign(nos.x - cx) || (side ? 1 : -1);
+        smoke.emit(1, {
+          x: nos.x, y: nos.y,
+          dirX: out * 0.35 + geo.aim.x * 2, dirY: 1,     // nose smoke streams down and slightly outwards
+          speed: (130 + 130 * ex.strength) * scale * settings.speed,
+          spread: 0.35 * settings.spread,
+          scale, strength: puffStrength * (ex.kind === 'nose' ? 0.9 : 0.7),
+          sizeMul: 0.32, turb: 0.3, growth: 0.6, drag: 0.8
+        });
+      }
+    }
+    whoosh = clamp(strength * live * (ex.kind === 'cough' ? 0.6 : ex.kind === 'nose' ? 0.55 : 1), 0, 1);
+  } else { emitAcc = 0; noseAcc = 0; }
 
   smoke?.update(dt);
   smoke?.render();
@@ -291,7 +350,7 @@ if (import.meta.env.DEV) Object.assign(window, { __hookah: { machine, audio, set
 
   // 5. audio + HUD
   audio.update(dt, inhaling ? 0.5 + 0.5 * chargeFrac : 0, chargeFrac, whoosh);
-  ui.updateHud(now, machine, sig, calibration.active, fps, smoke?.count ?? 0, running);
+  ui.updateHud(now, machine, sig, calibration.active, fps, smoke?.count ?? 0, running, machine.isOShape(sig));
   ui.setHint(currentHint(now));
 }
 
@@ -314,6 +373,8 @@ addEventListener('keydown', e => {
   if (n >= 1 && n <= Math.min(9, SMOKE_PRESETS.length)) { change('smokePreset', n - 1); audio.ensure(); }
   else if (k === 'c') startCalibration();
   else if (k === 't') testSmoke();
+  else if (k === 'o') { audio.ensure(); if (!calibration.active) puffRing(0.8); }
+  else if (k === 'n') { audio.ensure(); if (!calibration.active) machine.forceExhale('nose', 0.8, 2); }
   else if (k === 'r') resetAll();
   else if (k === 'd') change('debugOpen', !settings.debugOpen);
   else if (k === 'l') change('showLandmarks', !settings.showLandmarks);

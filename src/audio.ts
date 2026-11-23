@@ -99,6 +99,29 @@ export class HookahAudio {
     osc.start(at); osc.stop(at + dur + 0.02);
   }
 
+  /** A soft low "pop" for each smoke ring. */
+  ringPuff(strength = 0.7): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running') return;
+    const at = ctx.currentTime + 0.01;
+    const src = ctx.createBufferSource(); src.buffer = this.noise;
+    const lp = Object.assign(ctx.createBiquadFilter(), { type: 'lowpass' }); lp.frequency.value = 500;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.5 * strength, at + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+    src.connect(lp).connect(g).connect(this.master);
+    src.start(at, Math.random()); src.stop(at + 0.2);
+    const osc = ctx.createOscillator();
+    osc.frequency.setValueAtTime(120, at); osc.frequency.exponentialRampToValueAtTime(60, at + 0.12);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, at);
+    og.gain.exponentialRampToValueAtTime(0.35 * strength, at + 0.008);
+    og.gain.exponentialRampToValueAtTime(0.0001, at + 0.14);
+    osc.connect(og).connect(this.master);
+    osc.start(at); osc.stop(at + 0.16);
+  }
+
   /** A short coughing fit: 3 bursts. */
   cough(): void {
     const ctx = this.ctx;

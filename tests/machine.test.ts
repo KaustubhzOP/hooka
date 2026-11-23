@@ -171,6 +171,65 @@ describe('Machine', () => {
     expect(m.state).toBe('HOLDING');
   });
 
+  describe('smoke rings', () => {
+    const O = { blow: 0.5, funnel: 0.6, jaw: 0.3 };      // funnelled lips, jaw open
+    const rings = () => events.filter(e => e.type === 'ring');
+
+    it('puffs one ring per O-shaped mouth, using charge, without exhaling', () => {
+      inhaleThenHold(2.5);
+      const charge = m.charge;
+      run(0.3, O);
+      expect(rings()).toHaveLength(1);                       // held O = still one ring
+      expect(m.state).toBe('HOLDING');
+      expect(m.charge).toBeCloseTo(charge - DEFAULT_MACHINE_CONFIG.ringCost, 5);
+      run(0.2, { blow: RELAXED });                           // close the mouth…
+      run(0.2, O);                                           // …and make another O
+      expect(rings()).toHaveLength(2);
+      expect(exhales()).toHaveLength(0);
+    });
+
+    it('goes back to IDLE once the rings have used up the smoke', () => {
+      inhaleThenHold(1.0);                                   // ~0.9 s charge → 1 ring, then empty
+      run(0.3, O);
+      run(0.2, { blow: RELAXED });
+      run(0.3, O);
+      expect(m.state).toBe('IDLE');
+      expect(m.charge).toBe(0);
+      expect(transitions().at(-1)).toBe('IDLE');
+    });
+
+    it('a lingering O after pulling the pen away does not puff a ring', () => {
+      run(2, { penNear: true, ...O });
+      run(0.5, { penNear: false, ...O });
+      expect(m.state).toBe('HOLDING');
+      run(1, O);
+      expect(rings()).toHaveLength(0);
+    });
+
+    it('an O mouth never counts as a blow or a jaw leak', () => {
+      inhaleThenHold(4);
+      run(0.3, { blow: 0.6, funnel: 0.6, jaw: 0.6 });        // wide O
+      expect(exhales()).toHaveLength(0);
+      expect(rings()).toHaveLength(1);
+    });
+  });
+
+  describe('nose exhale', () => {
+    it('scrunching the nose while holding exhales through the nose', () => {
+      inhaleThenHold();
+      run(0.1, { blow: RELAXED, sneer: 0.6 });
+      expect(m.state).toBe('HOLDING');
+      run(0.1, { blow: RELAXED, sneer: 0.6 });
+      expect(m.state).toBe('EXHALING');
+      expect(exhales()[0].kind).toBe('nose');
+    });
+
+    it('a sneer does nothing outside HOLDING', () => {
+      run(2, { blow: RELAXED, sneer: 0.9, penNear: true });
+      expect(m.state).toBe('IDLE');
+    });
+  });
+
   it('forceExhale works from IDLE (test smoke)', () => {
     m.forceExhale();
     expect(m.state).toBe('EXHALING');

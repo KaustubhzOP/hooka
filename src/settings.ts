@@ -12,6 +12,9 @@ export interface Settings {
   requirePinch: boolean;
   maxInhale: number;     // seconds
   maxHold: number;       // seconds before an involuntary cough
+  ringFunnel: number;    // mouthFunnel for an "O" mouth (smoke rings)
+  ringJaw: number;       // jawOpen for an "O" mouth
+  sneerOn: number;       // noseSneer that exhales through the nose
   // smoke look
   smokePreset: number;
   useCustomColor: boolean;
@@ -19,6 +22,7 @@ export interface Settings {
   density: number;       // emission multiplier
   speed: number;         // velocity multiplier
   spread: number;        // plume width multiplier
+  noseSmoke: number;     // share of a mouth exhale that also streams from the nose (0 = none)
   // misc
   muted: boolean;
   showLandmarks: boolean;
@@ -33,12 +37,16 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   requirePinch: false,
   maxInhale: 4.0,
   maxHold: 6.0,
+  ringFunnel: 0.35,
+  ringJaw: 0.15,
+  sneerOn: 0.35,
   smokePreset: 0,
   useCustomColor: false,
   customColor: '#9fd8ff',
   density: 1.0,
   speed: 1.0,
   spread: 1.0,
+  noseSmoke: 0.35,
   muted: false,
   showLandmarks: false,
   debugOpen: false
@@ -52,6 +60,10 @@ export const RANGES = {
   pinchMax:  { min: 0.1,  max: 1.2, step: 0.05 },
   maxInhale: { min: 1,    max: 8,   step: 0.5 },
   maxHold:   { min: 2,    max: 12,  step: 0.5 },
+  ringFunnel:{ min: 0.1,  max: 0.9, step: 0.01 },
+  ringJaw:   { min: 0.02, max: 0.6, step: 0.01 },
+  sneerOn:   { min: 0.1,  max: 0.9, step: 0.01 },
+  noseSmoke: { min: 0,    max: 1,   step: 0.05 },
   density:   { min: 0.2,  max: 2.5, step: 0.05 },
   speed:     { min: 0.3,  max: 2.5, step: 0.05 },
   spread:    { min: 0.2,  max: 2.5, step: 0.05 }

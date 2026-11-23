@@ -17,6 +17,20 @@ export interface EmitOptions {
   spread: number;              // radians of random angle around dir (full width)
   scale: number;               // face width / 300 — everything scales with it
   strength: number;            // 0…1, alpha multiplier
+  sizeMul?: number;            // puff size multiplier (nose streams are thinner)
+  turb?: number;               // turbulence multiplier at birth (ramps to 1 with age)
+  growth?: number;             // growth multiplier
+  drag?: number;               // drag multiplier
+}
+
+export interface RingOptions {
+  x: number; y: number;        // centre (mouth)
+  dirX: number; dirY: number;  // travel direction
+  speed: number;               // travel speed px/s
+  radius: number;              // starting radius px
+  expand: number;              // radial growth speed px/s
+  scale: number;
+  strength: number;
 }
 
 const VERT = /* glsl */`
@@ -94,7 +108,11 @@ export class SmokeRenderer {
   private seed = new Float32Array(MAX_PARTICLES);
   private sc = new Float32Array(MAX_PARTICLES);
   private str = new Float32Array(MAX_PARTICLES);
-  private soa = [this.px, this.py, this.vx, this.vy, this.size, this.age, this.life, this.rot, this.spin, this.seed, this.sc, this.str];
+  private turbK = new Float32Array(MAX_PARTICLES);
+  private growK = new Float32Array(MAX_PARTICLES);
+  private dragK = new Float32Array(MAX_PARTICLES);
+  private soa = [this.px, this.py, this.vx, this.vy, this.size, this.age, this.life, this.rot, this.spin, this.seed,
+                 this.sc, this.str, this.turbK, this.growK, this.dragK];
 
   preset!: SmokePreset;
 
@@ -157,18 +175,14 @@ export class SmokeRenderer {
     const p = this.preset;
     const base = Math.atan2(o.dirY, o.dirX);
     for (let k = 0; k < n; k++) {
-      let i = this.count;
-      if (i >= MAX_PARTICLES) {
-        // Recycle the oldest-looking slot instead of dropping new smoke.
-        i = Math.floor(Math.random() * MAX_PARTICLES);
-      } else this.count++;
+      const i = this.slot();
       const ang = base + (Math.random() - 0.5) * o.spread;
       const sp = o.speed * (0.55 + Math.random() * 0.9);
       this.px[i] = o.x + (Math.random() - 0.5) * 8 * o.scale;
       this.py[i] = o.y + (Math.random() - 0.5) * 4 * o.scale;
       this.vx[i] = Math.cos(ang) * sp;
       this.vy[i] = Math.sin(ang) * sp;
-      this.size[i] = (22 + Math.random() * 18) * o.scale;
+      this.size[i] = (22 + Math.random() * 18) * o.scale * (o.sizeMul ?? 1);
       this.age[i] = 0;
       this.life[i] = p.life * (0.7 + Math.random() * 0.6);
       this.rot[i] = Math.random() * Math.PI * 2;
@@ -176,14 +190,55 @@ export class SmokeRenderer {
       this.seed[i] = Math.random() * 10;
       this.sc[i] = o.scale;
       this.str[i] = o.strength;
+      this.turbK[i] = o.turb ?? 1;
+      this.growK[i] = o.growth ?? 1;
+      this.dragK[i] = o.drag ?? 1;
     }
+  }
+
+  /**
+   * A smoke ring: small puffs on an ellipse that travel together and expand.
+   * Turbulence starts near zero so the ring stays coherent, then ramps in so it wobbles and breaks up.
+   */
+  emitRing(o: RingOptions): void {
+    const p = this.preset;
+    const n = 90;
+    const dl = Math.hypot(o.dirX, o.dirY) || 1;
+    const tx = (o.dirX / dl) * o.speed, ty = (o.dirY / dl) * o.speed;
+    const squash = 0.78;                      // seen slightly from below: an ellipse
+    for (let k = 0; k < n; k++) {
+      const i = this.slot();
+      const a = (k / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.08;
+      const cx = Math.cos(a), cy = Math.sin(a) * squash;
+      const rj = o.radius * (0.92 + Math.random() * 0.16);
+      this.px[i] = o.x + cx * rj;
+      this.py[i] = o.y + cy * rj;
+      this.vx[i] = tx + cx * o.expand;
+      this.vy[i] = ty + cy * o.expand;
+      this.size[i] = (11 + Math.random() * 5) * o.scale;
+      this.age[i] = 0;
+      this.life[i] = Math.max(2.8, p.life * 1.15) * (0.9 + Math.random() * 0.2);
+      this.rot[i] = Math.random() * Math.PI * 2;
+      this.spin[i] = (Math.random() - 0.5) * 0.6;
+      this.seed[i] = Math.random() * 10;
+      this.sc[i] = o.scale;
+      this.str[i] = Math.min(1, o.strength * 1.2);
+      this.turbK[i] = 0.02;
+      this.growK[i] = 0.45;
+      this.dragK[i] = 0.35;
+    }
+  }
+
+  /** Next free particle index; when full, recycle a random slot instead of dropping new smoke. */
+  private slot(): number {
+    if (this.count < MAX_PARTICLES) return this.count++;
+    return Math.floor(Math.random() * MAX_PARTICLES);
   }
 
   update(dt: number): void {
     if (!this.preset) return;
     this.time += dt;
     const p = this.preset, f = this.flow, t = this.time * 0.35;
-    const drag = Math.exp(-1.7 * dt);
     for (let i = this.count - 1; i >= 0; i--) {
       const age = (this.age[i] += dt);
       if (age >= this.life[i]) { this.kill(i); continue; }
@@ -191,12 +246,14 @@ export class SmokeRenderer {
       // turbulence ramps in as the jet slows down
       const cell = 170 * sc;
       curl2(this.px[i] / cell, this.py[i] / cell, t + this.seed[i] * 0.05, f);
-      const turb = p.turbulence * 55 * sc * Math.min(1, age * 1.4);
-      this.vy[i] -= 48 * p.buoyancy * sc * dt;           // buoyancy (screen y points down)
+      const tk = this.turbK[i] < 1 ? Math.min(1, this.turbK[i] + age * age * 0.045) : 1;
+      const turb = p.turbulence * 55 * sc * Math.min(1, age * 1.4) * tk;
+      this.vy[i] -= 48 * p.buoyancy * sc * dt * (tk < 1 ? 0.5 : 1);   // buoyancy (screen y points down)
+      const drag = Math.exp(-1.7 * this.dragK[i] * dt);
       this.vx[i] *= drag; this.vy[i] *= drag;
       this.px[i] += (this.vx[i] + f.x * turb) * dt;
       this.py[i] += (this.vy[i] + f.y * turb) * dt;
-      this.size[i] += (70 * p.growth * sc / (1 + age * 1.2)) * dt;
+      this.size[i] += (70 * p.growth * this.growK[i] * sc / (1 + age * 1.2)) * dt;
       this.rot[i] += this.spin[i] * dt;
     }
   }

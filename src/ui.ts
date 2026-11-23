@@ -27,19 +27,20 @@ type SliderKey = keyof typeof RANGES;
 
 const THRESHOLD_SLIDERS: [SliderKey, string][] = [
   ['blowOn', 'Blow threshold'], ['penNear', 'Pen near (faces)'], ['penExt', 'Pen length (hands)'],
-  ['pinchMax', 'Pinch max'], ['maxInhale', 'Max inhale (s)'], ['maxHold', 'Max hold (s)']
+  ['pinchMax', 'Pinch max'], ['maxInhale', 'Max inhale (s)'], ['maxHold', 'Max hold (s)'],
+  ['ringFunnel', 'Ring: funnel'], ['ringJaw', 'Ring: jaw open'], ['sneerOn', 'Nose: sneer']
 ];
-const SMOKE_SLIDERS: [SliderKey, string][] = [['density', 'Density'], ['speed', 'Speed'], ['spread', 'Spread']];
+const SMOKE_SLIDERS: [SliderKey, string][] = [['density', 'Density'], ['speed', 'Speed'], ['spread', 'Spread'], ['noseSmoke', 'Nose smoke']];
 
 const SIGNAL_ROWS: [string, string][] = [
   ['blow', 'Blow score'], ['pucker', 'mouthPucker'], ['funnel', 'mouthFunnel'], ['jaw', 'jawOpen'],
-  ['close', 'mouthClose'], ['cheek', 'cheekPuff'], ['penDist', 'Pen dist (÷2)'], ['pinch', 'Pinch gap']
+  ['close', 'mouthClose'], ['cheek', 'cheekPuff'], ['sneer', 'noseSneer'], ['penDist', 'Pen dist (÷2)'], ['pinch', 'Pinch gap']
 ];
 
 export const HINTS: Record<State, string> = {
   IDLE: 'Bring the pen to your lips and purse them to inhale…',
   INHALING: 'Inhaling… relax your lips or pull the pen away to hold it in.',
-  HOLDING: 'Holding. Keep your mouth closed, then purse your lips to blow it out.',
+  HOLDING: 'Holding… purse your lips to blow · make an “O” to puff rings · scrunch your nose to exhale through it',
   EXHALING: 'Exhaling…'
 };
 
@@ -94,6 +95,8 @@ export class UI {
     this.sigEls.get('blow')!.mark.hidden = false;
     this.sigEls.get('penDist')!.mark.hidden = false;
     this.sigEls.get('pinch')!.mark.hidden = false;
+    this.sigEls.get('funnel')!.mark.hidden = false;
+    this.sigEls.get('sneer')!.mark.hidden = false;
     for (const [k, label, color] of [['charge', 'Inhale charge', 'var(--cyan)'], ['hold', 'Hold time', 'var(--amber)'], ['exhale', 'Exhale left', 'var(--green)']]) {
       const row = document.createElement('div'); row.className = 'sig';
       row.innerHTML = `<span>${label}</span><div class="bar"><i style="background:${color}"></i></div><span>–</span>`;
@@ -198,7 +201,7 @@ export class UI {
   }
 
   /** Badge + hint + debug numbers. Throttled to ~11 Hz except for state changes. */
-  updateHud(now: number, m: Machine, sig: Signals, calibrating: boolean, fps: number, particles: number, running: boolean): void {
+  updateHud(now: number, m: Machine, sig: Signals, calibrating: boolean, fps: number, particles: number, running: boolean, oShape = false): void {
     const label = calibrating ? 'CALIBRATING' : m.state;
     if (label !== this.lastState) {
       this.lastState = label;
@@ -222,7 +225,7 @@ export class UI {
     setMeter('exhale', ex ? 1 - ex.t / ex.duration : 0, ex ? (ex.duration - ex.t).toFixed(1) + 's' : '–');
 
     const vals: Record<string, number> = {
-      blow: sig.blow, pucker: sig.pucker, funnel: sig.funnel, jaw: sig.jaw, close: sig.close, cheek: sig.cheek,
+      blow: sig.blow, pucker: sig.pucker, funnel: sig.funnel, jaw: sig.jaw, close: sig.close, cheek: sig.cheek, sneer: sig.sneer,
       penDist: sig.pen && isFinite(sig.pen.dist) ? sig.pen.dist / 2 : 1, pinch: sig.pen ? sig.pen.pinch : 1
     };
     for (const [k, v] of Object.entries(vals)) {
@@ -236,6 +239,12 @@ export class UI {
     const pen = this.sigEls.get('penDist')!;
     pen.mark.style.left = clamp01(s.penNear / 2) * 100 + '%';
     pen.fill.style.background = sig.penNear ? 'var(--green)' : 'var(--accent)';
+    const funnel = this.sigEls.get('funnel')!;
+    funnel.mark.style.left = clamp01(s.ringFunnel) * 100 + '%';
+    funnel.fill.style.background = oShape ? 'var(--amber)' : 'var(--accent)';
+    const sneer = this.sigEls.get('sneer')!;
+    sneer.mark.style.left = clamp01(s.sneerOn) * 100 + '%';
+    sneer.fill.style.background = sig.sneer >= s.sneerOn ? 'var(--green)' : 'var(--accent)';
     const pinch = this.sigEls.get('pinch')!;
     pinch.mark.style.left = clamp01(s.pinchMax) * 100 + '%';
     pinch.fill.style.background = sig.pinchOk ? 'var(--green)' : 'var(--accent)';
