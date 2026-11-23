@@ -1,29 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { Calibration, computeCalibration, LEAD_S, SAMPLE_S } from '../src/calibration';
+import { Calibration, computeCalibration, LEAD_S, SAMPLE_S, type CalSample } from '../src/calibration';
 import { loadSettings, saveSettings, sanitizeSettings, DEFAULT_SETTINGS, STORAGE_KEY } from '../src/settings';
 
+const sample = (o: Partial<CalSample> = {}): CalSample => ({ blow: 0.05, funnel: 0.05, jaw: 0.03, sneer: 0.05, pitch: 0.1, ...o });
+const many = (o: Partial<CalSample>) => Array.from({ length: 20 }, () => sample(o));
+
 describe('calibration', () => {
-  it('sets the threshold halfway between neutral and pucker', () => {
-    const r = computeCalibration([0.1, 0.1], [0.7, 0.7]);
-    expect(r.threshold).toBeCloseTo(0.4);
-    expect(r.weak).toBe(false);
+  it('derives every gesture threshold from your own face', () => {
+    const r = computeCalibration({
+      neutral: many({}), sip: many({ blow: 0.65, jaw: 0.05 }),
+      oh: many({ blow: 0.6, funnel: 0.55, jaw: 0.35 }), scrunch: many({ sneer: 0.55 })
+    });
+    expect(r.blowOn).toBeCloseTo(0.35);
+    expect(r.ringFunnel).toBeCloseTo(0.3);
+    expect(r.ringJaw).toBeCloseTo(0.2);                     // halfway between the sip jaw and the O jaw
+    expect(r.sneerOn).toBeCloseTo(0.3);
+    expect(r.pitchOffset).toBeCloseTo(0.1);
+    expect(r.weak).toEqual([]);
   });
 
-  it('clamps the threshold and flags a weak pucker', () => {
-    expect(computeCalibration([0, 0], [0.05, 0.05]).threshold).toBe(0.1);
-    expect(computeCalibration([0, 0], [0.05, 0.05]).weak).toBe(true);
-    expect(computeCalibration([0.9], [1]).threshold).toBe(0.8);
+  it('flags weak gestures and leaves their thresholds alone', () => {
+    const r = computeCalibration({ neutral: many({}), sip: many({ blow: 0.1 }), oh: many({ funnel: 0.08 }), scrunch: many({ sneer: 0.07 }) });
+    expect(r.blowOn).toBeNull(); expect(r.ringFunnel).toBeNull(); expect(r.sneerOn).toBeNull();
+    expect(r.weak).toEqual(['sip', 'oh', 'scrunch']);
   });
 
-  it('runs both guided steps and produces a result', () => {
+  it('clamps the blow threshold', () => {
+    expect(computeCalibration({ neutral: many({ blow: 0.9 }), sip: many({ blow: 1 }), oh: [], scrunch: [] }).blowOn).toBeNull();
+    expect(computeCalibration({ neutral: many({ blow: 0.7 }), sip: many({ blow: 1 }), oh: [], scrunch: [] }).blowOn).toBe(0.8);
+  });
+
+  it('runs all four guided steps, and skipped steps are not weak', () => {
     const c = new Calibration();
     c.start();
     const dt = 1 / 30;
     let result = null;
-    for (let t = 0; t < 2 * (LEAD_S + SAMPLE_S) + 0.5 && !result; t += dt)
-      result = c.step(dt, c.phase === 'neutral' ? 0.05 : 0.65);
+    for (let t = 0; t < 4 * (LEAD_S + SAMPLE_S) + 1 && !result; t += dt) {
+      if (c.phase === 'scrunch') { result = c.skip(); break; }
+      result = c.step(dt, c.phase === 'sip' ? sample({ blow: 0.65 }) : sample());
+    }
     expect(result).not.toBeNull();
-    expect(result!.threshold).toBeCloseTo(0.35, 2);
+    expect(result!.blowOn).toBeCloseTo(0.35, 2);
+    expect(result!.sneerOn).toBeNull();
+    expect(result!.weak).toEqual(['oh']);
     expect(c.active).toBe(false);
   });
 });

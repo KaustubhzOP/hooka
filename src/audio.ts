@@ -122,6 +122,39 @@ export class HookahAudio {
     osc.start(at); osc.stop(at + 0.16);
   }
 
+  /** A quick in-breath (sipping the ghost back, French inhale). */
+  slurp(): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running') return;
+    const at = ctx.currentTime + 0.01;
+    const src = ctx.createBufferSource(); src.buffer = this.noise;
+    const bp = Object.assign(ctx.createBiquadFilter(), { type: 'bandpass' }); bp.Q.value = 2;
+    bp.frequency.setValueAtTime(500, at); bp.frequency.exponentialRampToValueAtTime(1800, at + 0.35);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.35, at + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.4);
+    src.connect(bp).connect(g).connect(this.master);
+    src.start(at, Math.random()); src.stop(at + 0.45);
+  }
+
+  /** Coals being flipped: a burst of crackles. */
+  crackle(): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running') return;
+    for (let i = 0; i < 14; i++) {
+      const at = ctx.currentTime + 0.02 + Math.random() * 0.5;
+      const src = ctx.createBufferSource(); src.buffer = this.noise;
+      const hp = Object.assign(ctx.createBiquadFilter(), { type: 'highpass' }); hp.frequency.value = 1500 + Math.random() * 3000;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.2 + Math.random() * 0.25, at + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.03 + Math.random() * 0.04);
+      src.connect(hp).connect(g).connect(this.master);
+      src.start(at, Math.random() * 1.5); src.stop(at + 0.1);
+    }
+  }
+
   /** A short coughing fit: 3 bursts. */
   cough(): void {
     const ctx = this.ctx;

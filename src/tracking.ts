@@ -10,6 +10,11 @@ const abs = (p: string) => new URL(BASE + p, location.href).href;
 export const WASM_PATH = abs('mediapipe/wasm');
 export const FACE_MODEL = abs('models/face_landmarker.task');
 export const HAND_MODEL = abs('models/hand_landmarker.task');
+export const SEGMENT_MODEL = abs('models/selfie_segmenter.tflite');
+
+/** Phones and tablets: smaller camera frames and lighter settings. */
+export const IS_MOBILE = typeof navigator !== 'undefined' &&
+  (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
 
 export type TrackingErrorKind = 'permission' | 'nocamera' | 'inuse' | 'insecure' | 'models' | 'unknown';
 
@@ -61,7 +66,7 @@ function toTrackingError(err: unknown): TrackingError {
 }
 
 /** Vite's dev server answers unknown paths with index.html; catch that before MediaPipe does. */
-async function assertAsset(url: string, label: string): Promise<void> {
+export async function assertAsset(url: string, label: string): Promise<void> {
   let res: Response;
   try { res = await fetch(url, { method: 'HEAD' }); }
   catch { throw new TrackingError('models', `Could not reach ${label}`); }
@@ -73,6 +78,8 @@ export class Tracker {
   face: FaceLandmarker | null = null;
   hands: HandLandmarker | null = null;
   delegate: 'GPU' | 'CPU' = 'GPU';
+  fileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
+  private numFaces = 1;
   stream: MediaStream | null = null;
   private lastVideoTime = -1;
   private lastTs = 0;
@@ -96,19 +103,20 @@ export class Tracker {
       assertAsset(WASM_PATH + '/vision_wasm_internal.wasm', 'MediaPipe WASM runtime')
     ]);
     let fileset;
-    try { fileset = await FilesetResolver.forVisionTasks(WASM_PATH); }
+    try { fileset = this.fileset = await FilesetResolver.forVisionTasks(WASM_PATH); }
     catch (e) { throw new TrackingError('models', 'MediaPipe runtime failed to start: ' + (e as Error).message); }
 
     const make = async (delegate: 'GPU' | 'CPU') => {
       const face = await FaceLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: FACE_MODEL, delegate },
-        runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true,
+        runningMode: 'VIDEO', numFaces: this.numFaces, outputFaceBlendshapes: true,
         minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5
       });
       const hands = await HandLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: HAND_MODEL, delegate },
         runningMode: 'VIDEO', numHands: 2,
-        minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
+        // Lower than the defaults: a hand holding a pen at the mouth is partly hidden by the face.
+        minHandDetectionConfidence: 0.35, minHandPresenceConfidence: 0.35, minTrackingConfidence: 0.35
       });
       return { face, hands };
     };
@@ -133,7 +141,9 @@ export class Tracker {
       throw new TrackingError('insecure', 'getUserMedia is not available on this page');
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user', frameRate: { ideal: 30 } },
+        video: IS_MOBILE
+          ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user', frameRate: { ideal: 30 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user', frameRate: { ideal: 30 } },
         audio: false
       });
     } catch (e) {
@@ -147,6 +157,15 @@ export class Tracker {
     this.stream.getVideoTracks()[0]?.addEventListener('ended', () => this.onEnded?.());
     return { width: v.videoWidth, height: v.videoHeight };
   }
+
+  /** Track one face, or two for 2-player mode. */
+  async setNumFaces(n: 1 | 2): Promise<void> {
+    this.numFaces = n;
+    if (this.face) await this.face.setOptions({ numFaces: n });
+  }
+
+  /** Last timestamp handed to MediaPipe (other tasks on the same video reuse it). */
+  get timestamp(): number { return this.lastTs; }
 
   /** Called if the camera is unplugged / stopped by the OS. */
   onEnded: (() => void) | null = null;
@@ -162,13 +181,12 @@ export class Tracker {
     const fr = this.face.detectForVideo(v, ts);
     const hr = this.hands.detectForVideo(v, ts);
 
-    let face: TrackingFrame['face'] = null;
-    if (fr.faceLandmarks?.length) {
+    const faces: TrackingFrame['faces'] = (fr.faceLandmarks ?? []).map((landmarks, i) => {
       const blendshapes: Record<string, number> = {};
-      for (const c of fr.faceBlendshapes?.[0]?.categories ?? []) blendshapes[c.categoryName] = c.score;
-      face = { landmarks: fr.faceLandmarks[0], blendshapes };
-    }
-    return { face, hands: hr.landmarks ?? [], width: v.videoWidth, height: v.videoHeight, now };
+      for (const c of fr.faceBlendshapes?.[i]?.categories ?? []) blendshapes[c.categoryName] = c.score;
+      return { landmarks, blendshapes };
+    });
+    return { faces, hands: hr.landmarks ?? [], width: v.videoWidth, height: v.videoHeight, now };
   }
 
   stop(): void {

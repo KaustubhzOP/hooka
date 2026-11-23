@@ -126,22 +126,79 @@ describe('Machine', () => {
     expect(exhales()[0].kind).toBe('cough');
   });
 
-  it('leaks a short, weak exhale when the jaw opens wide without blowing', () => {
-    inhaleThenHold();
-    run(0.25, { blow: RELAXED, jaw: 0.7 });
-    expect(m.state).toBe('HOLDING');
-    run(0.15, { blow: RELAXED, jaw: 0.7 });
-    expect(m.state).toBe('EXHALING');
-    const ex = exhales()[0];
-    expect(ex.kind).toBe('leak');
-    expect(ex.strength).toBeLessThanOrEqual(0.4);
-    expect(ex.duration).toBeLessThan(1);
+  describe('ghost puff', () => {
+    const WIDE = { blow: RELAXED, jaw: 0.7 };
+    const ghostEvents = () => events.flatMap(e => (e.type === 'ghost' ? [e.phase] : []));
+
+    it('opening the jaw wide while holding rolls out a ghost ball', () => {
+      inhaleThenHold();
+      run(0.2, WIDE);
+      expect(m.state).toBe('HOLDING');
+      run(0.15, WIDE);
+      expect(m.state).toBe('GHOST');
+      expect(ghostEvents()).toEqual(['out']);
+    });
+
+    it('a quick sip pulls the ghost back in and keeps the smoke', () => {
+      inhaleThenHold(2);
+      const charge = m.charge;
+      run(0.4, WIDE);
+      run(0.2, { blow: PURSED });
+      expect(m.state).toBe('HOLDING');
+      expect(ghostEvents()).toEqual(['out', 'in']);
+      expect(m.charge).toBeCloseTo(charge, 5);
+      run(0.5, { blow: PURSED });                           // the sip itself must not count as a blow
+      expect(m.state).toBe('HOLDING');
+    });
+
+    it('the ghost floats away if it is not sipped back in time', () => {
+      inhaleThenHold();
+      run(0.4, WIDE);
+      run(DEFAULT_MACHINE_CONFIG.ghostWindow + 0.1, { blow: RELAXED });
+      expect(m.state).toBe('IDLE');
+      expect(ghostEvents()).toEqual(['out', 'lost']);
+      expect(events.some(e => e.type === 'hitEnd' && e.outcome === 'ghostLost')).toBe(true);
+    });
   });
 
-  it('does not leak when the jaw opens only a little', () => {
+  describe('French inhale', () => {
+    const FRENCH = { blow: RELAXED, jaw: 0.2, pitch: 0.4 };
+    it('mouth slightly open + head tilted back starts the trick while holding', () => {
+      inhaleThenHold();
+      run(0.4, FRENCH);
+      expect(m.state).toBe('HOLDING');
+      expect(m.trick).toBe('french');
+      run(0.4, { blow: RELAXED, jaw: 0.2, pitch: 0 });      // head back down ends it
+      expect(m.trick).toBeNull();
+      const t = events.filter(e => e.type === 'trick');
+      expect(t.map(e => (e as { active: boolean }).active)).toEqual([true, false]);
+    });
+
+    it('needs the head tilted back', () => {
+      inhaleThenHold();
+      run(1, { blow: RELAXED, jaw: 0.2, pitch: 0.05 });
+      expect(m.trick).toBeNull();
+    });
+  });
+
+  it('reports the end of every hit (for turns in 2-player mode)', () => {
+    inhaleThenHold();
+    run(0.2, { blow: PURSED });
+    run(5, { blow: RELAXED });
+    expect(events.filter(e => e.type === 'hitEnd').map(e => (e as { outcome: string }).outcome)).toEqual(['exhaled']);
+  });
+
+  it('does not release a ghost when the jaw opens only a little', () => {
     inhaleThenHold();
     run(2, { blow: RELAXED, jaw: 0.3 });
     expect(m.state).toBe('HOLDING');
+  });
+
+  it('noisy O / sneer scores inside the hysteresis band do not flicker the gesture', () => {
+    inhaleThenHold();
+    run(0.3, { blow: 0.5, funnel: 0.6, jaw: 0.3 });           // O → ring 1
+    run(0.3, { blow: 0.5, funnel: 0.3, jaw: 0.3 });           // dips just under the threshold, above 0.75×
+    expect(events.filter(e => e.type === 'ring')).toHaveLength(1);
   });
 
   it('blocks the inhale without a pinch grip when requirePinch is on', () => {

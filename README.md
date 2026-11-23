@@ -1,12 +1,13 @@
 # Virtual Hookah 🫧
 
-A camera-based AR toy: hold a **real pen** like a hookah mouthpiece, and your lips and hand drive a
-virtual **inhale → hold → exhale** with smoke, a bubbling hookah and a hose that follows your hand.
+A camera-based AR toy: hold a **real pen** like a hookah mouthpiece, and your lips, nose, head and hands drive a
+virtual hookah: inhale, hold, then blow smoke, rings, dragon puffs, ghosts and waterfalls.
 
 > **Just for fun, no smoking involved.** No tobacco, no real smoke, just pixels.
 
-- Face and hand tracking run **in your browser** (MediaPipe, WebAssembly). **No video leaves your device**: nothing is uploaded, there is no server-side code.
-- Desktop Chrome / Edge. Works offline once installed: the WASM runtime and models are served from `public/`.
+- Face, hand and background tracking run **in your browser** (MediaPipe, WebAssembly). **No video leaves your device**: nothing is uploaded and there is no server-side code.
+- Works on desktop Chrome / Edge and on phones and tablets (Chrome on Android, Safari on iOS). Needs `https` or `localhost` for the camera.
+- Works offline once installed: the WASM runtime and models are served from `public/`.
 
 ## Run it
 
@@ -20,133 +21,120 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173> and click **Start camera**. Browsers only allow the camera on `localhost`
-or `https`.
+Open <http://localhost:5173> and click **Start camera**.
 
-`npm install` runs `scripts/setup-assets.mjs` (postinstall), which:
+`npm install` runs `scripts/setup-assets.mjs` (postinstall), which copies the MediaPipe WASM runtime into
+`public/mediapipe/wasm/` and downloads the official models into `public/models/`: `face_landmarker.task`,
+`hand_landmarker.task` (both float16) and `selfie_segmenter.tflite` (for background swap). If the download failed,
+run `npm run setup-assets` again.
 
-1. copies the MediaPipe WASM runtime from `node_modules/@mediapipe/tasks-vision/wasm` into `public/mediapipe/wasm/`
-2. downloads the official float16 `face_landmarker.task` and `hand_landmarker.task` models into `public/models/`
-
-If the download failed (offline, proxy), run it again later with `npm run setup-assets`, or download the two files by hand
-into `public/models/` (the script prints the URLs).
-
-Other scripts:
+**On a phone:** the camera needs `https`, so test the deployed site, or run `npm run dev -- --host` and open it through
+an https tunnel. Plain `http://192.168…` won't get camera access.
 
 | command | what it does |
 |---|---|
-| `npm test` | Vitest unit tests (state machine, signals, calibration, settings) |
+| `npm test` | Vitest unit tests (state machine, signals, calibration, settings, game, coals) |
 | `npm run typecheck` | TypeScript, no emit |
-| `npm run build` / `npm run preview` | production build in `dist/` and a local preview of it |
+| `npm run build` / `npm run preview` | production build in `dist/` (a static site) and a local preview |
 
 ## How to play
 
-1. **Bring the pen to your lips** and purse them (like sipping through it). After ~0.1 s you start **inhaling**: a cyan ring fills around your mouth, the water bubbles and the coals glow.
-2. **Relax your lips** (or pull the pen away) to **hold** the smoke. The ring turns amber and counts down.
-3. **Purse your lips again** to **blow** it out. Longer inhales give longer, bigger exhales; the live pucker strength modulates the plume, and turning your head aims it.
+1. **Calibrate first** (button or `C`): four 3-second steps: relax · sip with the pen at your lips · make an “O” · scrunch your nose. Skip any step with **Skip** / `Space`.
+2. **Inhale:** pen at your lips, sip. A cyan ring fills, the water bubbles, the coals glow.
+3. **Hold:** relax your lips. The ring turns amber and counts down. Then pick a trick:
 
-Tricks while **holding**:
+| trick | how | |
+|---|---|---|
+| **Blow** | purse your lips, mouth nearly closed | longer inhale = bigger exhale; turn your head to aim |
+| **Smoke rings** | make an **“O”** (lips round, jaw open); close and “O” again for the next | each ring uses 0.6 s of smoke; combos score more |
+| **Dragon** | **scrunch your nose** | all the smoke comes out of your nostrils |
+| **Nose smoke** | automatic | a share of every normal exhale streams from the nose (*Nose smoke* slider) |
+| **French inhale** | tilt your **head back** with your mouth **slightly open** | smoke flows from your lower lip up into your nose |
+| **Ghost** | open your mouth **wide** | a ball of smoke rolls out; **sip** within ~2 s to pull it back in, or it floats away |
+| **Waterfall** | tilt your **head down** while blowing | the smoke pours down off your lip, then lifts |
+| **Bend the smoke** | wave your hand through it, or blow at it after an exhale | the smoke swirls with your hand / gets pushed away |
 
-- **Smoke rings:** make an **"O"** with your mouth (lips rounded and funnelled, jaw open). Each O puffs one ring and uses 0.6 s of your inhale; close your mouth and make another O for the next ring. When the smoke runs out you're back to idle. A plain pursed-lips blow (jaw nearly closed) is still a normal exhale.
-- **Nose exhale ("dragon mode"):** **scrunch your nose** (the `noseSneer` blendshape) to blow the whole hit out through your nostrils.
-- On every normal exhale a little smoke also streams from your nose; the **Nose smoke** slider sets how much (0 turns it off).
+Hold too long (default 6 s) and you cough. A too-short inhale (< 0.5 s) doesn't count.
 
-Things that go wrong, on purpose:
+The **chips** at the top of the video (Face · Pen · Sip · O · Scrunch · Head) show what the camera sees right now:
+if a gesture doesn't work, watch its chip.
 
-- **Too short** (< 0.5 s inhale): nothing is stored.
-- **Held too long** (default 6 s): you cough it out.
-- **Mouth wide open** while holding: it leaks out in a small weak puff.
-- A pucker that is still lingering when you pull the pen away does **not** count as a blow: relax first, then blow.
+**Try it** buttons (and keys) play every effect without a camera; they don't score.
+
+### Hookah, scene and game
+
+- **Flavours** (`1`–`9`): Classic white, Mint, Grape, Watermelon, Blueberry, Peach, Double apple, Neon pink (glow), Dragon fire (glow). Each one sets the smoke colour *and* the water colour. Custom colour picker, plus density, speed, spread and nose-smoke sliders.
+- **Hookah skins:** Classic, Crystal (cut glass), LED (colour-cycling light) and Amber vases; five hose colours; coal power.
+- **Coals burn down:** heat drops and ash builds up as you smoke, so the smoke gets thinner. **Flip the coals** by touching the bowl with your fingers on camera, tapping it on screen, the button, or `X`. Fuel runs out over a session; *Fresh coals* resets it.
+- **Lighting:** the coals light up the smoke and your face (brighter while you pull); the LED vase adds coloured light.
+- **Background swap:** Camera, Blur, Lounge or Neon bar. You're cut out with MediaPipe selfie segmentation, on your device.
+- **Play tab:** ring challenge (combo counter, best rings per inhale, total rings, longest hold, best score), 16 achievements, and **2-player mode**: Player 1 on the left, Player 2 on the right; the hose and the tracking pass to the other player after each hit.
 
 ### Keys
 
-| key | action |
-|---|---|
-| `1`–`5` | smoke preset (Classic white, Mint, Grape, Neon pink, Dragon fire) |
-| `C` | calibrate (`Esc` cancels) |
-| `T` | test smoke (works without a camera) |
-| `O` | test smoke ring |
-| `N` | test nose exhale |
-| `R` | reset the state machine and clear smoke |
-| `D` | debug panel |
-| `L` | landmark overlay |
-| `M` | mute |
+`1`–`9` flavour · `C` calibrate (`Space` skip step, `Esc` cancel) · `T` smoke · `O` ring · `N` nose · `G` ghost ·
+`F` French · `W` waterfall · `X` flip coals · `R` reset · `D` debug · `L` landmarks · `M` mute
 
-## Calibrate (recommended)
+## Accuracy: what was done, and how to tune
 
-Press **C** (or the Calibrate button) with the camera on:
+- **Personal calibration** for every gesture: the sip threshold sits halfway between your relaxed face and your sip (measured *with the pen at your lips*, which matters because the pen changes the lip shape). The ring thresholds sit between your relaxed face and your “O”, and the ring jaw threshold sits between your sip and your “O”, so sips and O's can't be confused. The scrunch threshold works the same way. Your neutral head pitch becomes the zero for French inhale and waterfall.
+- **Smoothing + hysteresis** on every gesture channel (sip, O, scrunch), so noisy blendshapes don't flicker.
+- **Pen detection** is more forgiving: any of the grip point, the extended pen tip, or the thumb / index / middle fingertips near the lips counts. Hand detection confidence is lowered (hands at the mouth are half hidden by the face), and there's a 600 ms grace period.
 
-1. **Relax your face**, mouth gently closed, for 2 s.
-2. **Purse your lips** like sipping through the pen, and hold for 2 s.
+Debug panel (`D`): live bars for every signal, with red marks at the thresholds, a slider for each threshold, an event log with
+reasons, FPS, and a landmark overlay (`L`: lips, nostrils, hands, pen estimate).
 
-Each step has a 1.2 s lead-in before sampling. The blow threshold becomes
-`neutral + 0.5 × (pucker − neutral)`, clamped to `[0.1, 0.8]`. If your pucker barely differs from neutral
-(< 0.12) the app warns you and keeps the old threshold: exaggerate the pucker, improve the lighting, or set
-the threshold by hand. All settings (thresholds, smoke look, mute…) persist in `localStorage`.
-
-## Tuning thresholds (debug panel, `D`)
-
-The debug panel shows live bars for the blow score, `mouthPucker`, `mouthFunnel`, `jawOpen`, `mouthClose`,
-`cheekPuff`, pen distance and pinch gap; red marks show the current thresholds. It also has the state meters,
-an event log of every transition with its reason, and the tracking FPS. Turn on **Draw landmarks overlay** (`L`) to see the
-lips, hands, the estimated pen (grip → tip, green when "near") and its distance line to the mouth.
-
-| slider | default | raise it if… | lower it if… |
-|---|---|---|---|
-| **Blow threshold** (`blowOn`) | 0.35 | inhale/blow triggers while your lips are relaxed | pursing doesn't register (watch the blow bar cross the red mark) |
-| **Pen near** (`penNear`, face widths) | 0.9 | the pen isn't recognised at your lips | it triggers with the hand far from the mouth |
-| **Pen length** (`penExt`, hand sizes) | 0.6 | you hold the pen far back from its tip | you hold it close to the tip |
-| **Pinch max** (`pinchMax`) | 0.5 | "require pinch" rejects your grip | it accepts an open hand |
-| **Max inhale** (s) | 4 | | |
-| **Max hold** (s) | 6 | you cough too soon | |
-| **Ring: funnel** (`ringFunnel`) | 0.35 | rings fire when you just purse your lips | your O doesn't puff rings (watch the funnel bar turn amber) |
-| **Ring: jaw open** (`ringJaw`) | 0.15 | a pursed-lips blow turns into rings | you have to open your mouth very wide for a ring |
-| **Nose: sneer** (`sneerOn`) | 0.35 | the nose exhale fires by accident | scrunching your nose doesn't trigger it |
-
-Fixed timings (in `src/machine.ts`, `DEFAULT_MACHINE_CONFIG`): 120 ms pucker to start / to blow, 250 ms relaxed to
-end the inhale, 350 ms pen-away to end it, min inhale 0.5 s, jaw leak at `jawOpen > 0.45` for 0.35 s, exhale
-1.0 s + 0.6 s × charge, cooldown 0.8 s. Blow-score hysteresis: on at the threshold, off at 0.6× it.
-
-**Require pinch grip** (side panel) additionally demands the thumb and index tips be close together, which
-cuts false triggers from just touching your face.
+| slider | raise it if… | lower it if… |
+|---|---|---|
+| **Sip / blow** (`blowOn`) | inhale/blow trigger with relaxed lips | sipping isn't recognised |
+| **Pen near** (faces) | the pen isn't recognised at your lips | it triggers with the hand far away |
+| **Pen length** (hands) | you hold the pen far back from its tip | you hold it close to the tip |
+| **Ring: funnel / jaw open** | a normal blow turns into rings | your “O” doesn't make rings |
+| **Nose: scrunch** | dragon fires by accident | scrunching doesn't trigger it |
+| **French: tilt up° / Waterfall: tilt down°** | they trigger without meaning to | you have to tilt a lot |
+| **Max inhale / Max hold** (s) | | |
 
 ## How it works
 
 ```
-camera ─► tracking.ts ─► signals.ts ─► machine.ts ─► smoke.ts / hookah.ts / ui.ts / audio.ts
-          MediaPipe       blow score,    IDLE/INHALING/   rendering + sound
-          face + hands    pen-near…      HOLDING/EXHALING
+camera ─► tracking.ts ─► signals.ts ─► machine.ts ─► effects.ts ─► smoke.ts (WebGL)
+          MediaPipe       smoothed       IDLE/INHALING/  smoke         hookah.ts, lighting.ts (2D)
+          face, hands     gestures,      HOLDING/GHOST/  director      background.ts (segmentation)
+          segmentation    head pitch,    EXHALING + tricks             audio.ts, game.ts, ui.ts
+                          pen estimate
 ```
 
 | file | role |
 |---|---|
-| `src/tracking.ts` | camera, Face Landmarker (with blendshapes) + Hand Landmarker in VIDEO mode, GPU delegate with CPU fallback, typed errors |
-| `src/signals.ts` | blow score (max of pucker/funnel, exponentially smoothed), mouth = midpoint of landmarks 13/14, face width = 234↔454, pen estimate (see below), 400 ms grace, 1.2× hysteresis, mouth kept 1.5 s after the face drops. All coordinates are mirrored screen pixels. |
-| `src/machine.ts` | the pure state machine (no DOM), emits transition/exhale events |
-| `src/calibration.ts` | the two-step calibration, pure |
-| `src/settings.ts` | defaults, validation, `localStorage` persistence |
-| `src/smoke.ts`, `src/noise.ts` | Three.js smoke: instanced quads, CPU physics with curl noise (simplex, divergence-free), buoyancy, drag, growth; fbm-warped soft puffs in the fragment shader; ≤ 1000 particles; normal or true additive blending over the video |
-| `src/presets.ts` | smoke presets: plain objects, add one to the array and it appears in the UI |
-| `src/hookah.ts` | 2D canvas hookah: glass vase with water and bubbles, brass stem, clay bowl with glowing coals and sparks, Bézier hose with sag following the pen on a spring |
-| `src/audio.ts` | Web Audio: bubbling (sine blips + gurgle bed), exhale whoosh (band-passed noise), cough; all procedural |
-| `src/ui.ts` | DOM panels, HUD badge/hints/cards, progress ring and landmark overlay drawing |
+| `src/tracking.ts` | camera (lighter profile on phones), Face Landmarker (blendshapes, 1 or 2 faces) + Hand Landmarker, GPU with CPU fallback, typed errors |
+| `src/signals.ts` | blow/funnel/jaw/sneer smoothing, head pitch, mouth & nostrils, pen estimate, hand motion, face selection for 2 players |
+| `src/machine.ts` | pure state machine with tricks (rings, nose, French, ghost, cough), hysteresis |
+| `src/calibration.ts` | 4-step personal calibration, pure |
+| `src/effects.ts` | where and how smoke is emitted for each gesture; wind and hand stirring |
+| `src/smoke.ts`, `src/noise.ts` | Three.js smoke: instanced puffs, curl-noise physics, groups (ghost, French), per-puff buoyancy (waterfall), coal light in the shader, adaptive particle cap |
+| `src/presets.ts` | flavours, vase skins, hose colours: plain objects, add one and it appears |
+| `src/hookah.ts` | 2D hookah: skins, flavour water, bubbles, coals (burn, ash, flip), Bézier hose following the pen |
+| `src/lighting.ts` | coal / LED light on the scene and your face (`mix-blend-mode: screen`) |
+| `src/background.ts` | selfie segmentation + procedural lounge / neon bar / blur backdrops |
+| `src/game.ts` | scoring, ring combos, achievements, 2-player turns, persisted stats |
+| `src/audio.ts` | Web Audio, all procedural: bubbling, whoosh, cough, ring pop, slurp, coal crackle |
+| `src/ui.ts` | DOM: tabs, controls, HUD chips, toasts, cards, ring & landmark drawing |
 | `src/main.ts` | wiring and the frame loop |
 
-**The pen is estimated, not detected.** MediaPipe has no pen detector, so the hand is the proxy: the grip point is
-the midpoint of thumb tip (4) and index tip (8), and the pen tip is extended along the index finger (5 → 8) by
-`penExt` × hand size (wrist 0 → middle MCP 9). The pen counts as "at the lips" when the closer of the two points is
-within `penNear` face widths of the mouth.
+**Layers:** video → backdrop (when on) → light → smoke (WebGL) → hookah + hose, ring, debug (2D) → HTML UI.
 
-**Layers:** video (CSS-mirrored) → smoke (WebGL canvas) → hookah + hose, ring, debug overlay (2D canvas) → HTML UI.
+## Deploying
+
+`npm run build` produces a static site in `dist/` (the models and WASM are copied in from `public/`). Any static host
+works: the build command is `npm install && npm run build`, and the output directory is `dist`. Vercel and Render configs will be added when we deploy.
 
 ## Known limitations
 
-- **The pen itself is never seen.** Any hand near the mouth (scratching your chin, a finger on the lips) can count as the pen. Enable *Require pinch grip* to reduce this.
-- **Blendshapes vary by face, lighting and camera.** Calibrate; beards, moustaches, strong backlight or low light make pucker detection noisy.
-- **Occlusion:** a hand or arm covering a large part of the face (e.g. the forehead) can make the face tracker drop out. The 400 ms grace and 1.5 s mouth memory only bridge short gaps.
-- **2D only:** the smoke is a screen-space effect; it doesn't know about depth and won't go behind your head or hand.
-- Rings and the nose exhale are gestures, not real airflow: the camera can't see you push air, so an "O" mouth makes a ring whether or not you actually puff. A quick pursed blow that passes through an O shape on the way can puff a ring instead of exhaling; raise *Ring: jaw open* if that happens.
-- Talking, whistling or kissing faces also produce pucker/funnel scores and can trigger an inhale when the pen is at the lips.
-- The hose attaches at the back of the hand (where a mouthpiece's hose would be) rather than at the pen tip, so it doesn't run into your mouth.
-- Desktop Chrome/Edge only; no mobile layout or touch handling. Safari/Firefox are untested.
-- Performance depends on the GPU: tracking two models per frame is the main cost. If FPS is low, close other camera/GPU-heavy tabs; the app falls back to CPU if the GPU delegate fails, which is slower.
+- **The pen itself is never seen.** Any hand near the mouth counts as the pen. Enable *Require a pinch grip* (Debug) to reduce this.
+- **Gestures are read from blendshapes**, which vary with faces, beards, lighting and camera angle. Calibrate, and use even, frontal light. The camera can't see airflow: an “O” makes a ring whether or not you actually puff.
+- **Head pitch** comes from the forehead/chin depth estimate and is only roughly calibrated: adjust the tilt sliders if French/waterfall trigger too easily or too rarely.
+- **Occlusion:** a hand or arm covering much of the face can make face tracking drop out; the grace periods only bridge short gaps.
+- **2D only:** the smoke is a screen-space effect and won't go behind your head or hand.
+- **Background swap** is a soft cut-out; hair edges can bleed, and it costs frame rate, especially on phones.
+- **2 players** need both faces fully in frame. Player 1 is whoever is on the left of the screen.
+- **Phones:** performance varies a lot; the particle count drops automatically when FPS is low. iOS needs Safari 15+.

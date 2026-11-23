@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SignalProcessor, estimatePen, blowScore, type Landmark, type TrackingFrame } from '../src/signals';
+import { SignalProcessor, estimatePen, blowScore, headPitch, selectFace, type Landmark, type TrackingFrame } from '../src/signals';
 
 const W = 1000, H = 1000;
 const cfg = { penNear: 0.9, penExt: 0.6, pinchMax: 0.5 };
@@ -10,6 +10,7 @@ function face(blend: Record<string, number> = {}) {
   lm[13] = { x: 0.5, y: 0.59 }; lm[14] = { x: 0.5, y: 0.61 };
   lm[234] = { x: 0.6, y: 0.5 }; lm[454] = { x: 0.4, y: 0.5 };
   lm[1] = { x: 0.5, y: 0.52 };
+  lm[10] = { x: 0.5, y: 0.35, z: 0 }; lm[152] = { x: 0.5, y: 0.7, z: 0 };
   return { landmarks: lm, blendshapes: blend };
 }
 
@@ -25,7 +26,7 @@ function hand(x: number, y: number, pinchGap = 0.01): Landmark[] {
 }
 
 const frame = (now: number, f: ReturnType<typeof face> | null, hands: Landmark[][] = []): TrackingFrame =>
-  ({ face: f, hands, width: W, height: H, now });
+  ({ faces: f ? [f] : [], hands, width: W, height: H, now });
 
 describe('signals', () => {
   it('blow score is max(pucker, funnel)', () => {
@@ -59,12 +60,12 @@ describe('signals', () => {
     // slightly beyond 0.9 face widths but within 1.2× hysteresis
     s = sp.update(frame(33, face(), [hand(0.5, 0.6 + 0.2 + 0.06)]), cfg);
     expect(s.pen!.dist).toBeGreaterThan(0.9);
-    expect(s.pen!.dist).toBeLessThan(1.08);
+    expect(s.pen!.dist).toBeLessThan(1.12);
     expect(s.penNear).toBe(true);
-    // hand disappears: grace keeps it near for ~400 ms
+    // hand disappears: grace keeps it near for ~600 ms
     s = sp.update(frame(200, face(), []), cfg);
     expect(s.penNear).toBe(true);
-    s = sp.update(frame(600, face(), []), cfg);
+    s = sp.update(frame(800, face(), []), cfg);
     expect(s.penNear).toBe(false);
   });
 
@@ -73,6 +74,20 @@ describe('signals', () => {
     sp.update(frame(0, face()), cfg);
     expect(sp.update(frame(1000, null), cfg).mouth).not.toBeNull();
     expect(sp.update(frame(1700, null), cfg).mouth).toBeNull();
+  });
+
+  it('computes head pitch from the forehead→chin depth (+ = looking up)', () => {
+    const up = face(); up.landmarks[10] = { x: 0.5, y: 0.35, z: 0.05 }; up.landmarks[152] = { x: 0.5, y: 0.7, z: -0.05 };
+    expect(headPitch(up.landmarks, W, H)).toBeGreaterThan(0.2);
+    expect(headPitch(face().landmarks, W, H)).toBeCloseTo(0);
+  });
+
+  it('follows the left or right face in 2-player mode', () => {
+    const left = face(), right = face();
+    // mirrored: a face at normalised x 0.8 appears on the LEFT of the screen
+    for (const [f, x] of [[left, 0.8], [right, 0.2]] as const) { f.landmarks[234] = { x: x + 0.1, y: 0.5 }; f.landmarks[454] = { x: x - 0.1, y: 0.5 }; }
+    expect(selectFace([right, left], 0, null, W)).toBe(left);
+    expect(selectFace([right, left], 1, null, W)).toBe(right);
   });
 
   it('reports the pinch grip', () => {
