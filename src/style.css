@@ -315,3 +315,6 @@ body.inCall .tiles { display: flex; gap: 10px; height: 26%; min-height: 120px; m
 .actions button { white-space: nowrap; }
 
 .foot a { color: var(--dim); }
+
+.tile .unmute { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); padding: 6px 12px; font-size: 13px;
+  background: rgba(8,9,14,.82); border-color: var(--amber); white-space: nowrap; z-index: 2; }

@@ -243,24 +243,54 @@ export class OnlineController {
 
   private setTile(user: string, stream: MediaStream | null) {
     let tile = this.tileEls.get(user);
-    if (!stream) { tile?.remove(); this.tileEls.delete(user); this.deps.layout(); return; }
+    if (!stream) {
+      tile?.remove(); this.tileEls.delete(user);
+      this.updateCallLayout();
+      return;
+    }
     if (!tile) {
       const video = h('video', { autoplay: true, playsInline: true });
-      tile = h('div', { class: 'tile', 'data-user': user }, video, h('div', { class: 'tileLabel' }));
+      video.setAttribute('playsinline', '');            // iOS Safari needs the attribute, not just the property
+      const unmute = h('button', { class: 'unmute', hidden: true, onclick: () => {
+        video.muted = false;
+        void video.play().then(() => { unmute.hidden = true; }).catch(() => {});
+      } }, '🔇 Tap to unmute');
+      tile = h('div', { class: 'tile', 'data-user': user }, video, unmute, h('div', { class: 'tileLabel' }));
       this.tiles.append(tile);
       this.tileEls.set(user, tile);
-      this.deps.layout();
     }
     const v = tile.querySelector('video')!;
-    if (v.srcObject !== stream) { v.srcObject = stream; void v.play().catch(() => {}); }
+    if (v.srcObject !== stream) {
+      v.srcObject = stream;
+      this.playTile(v, tile.querySelector<HTMLButtonElement>('.unmute')!);
+    }
+    this.updateCallLayout();
     this.renderTiles();
+  }
+
+  /** Phones often refuse to auto-play video with sound: fall back to muted playback plus a tap-to-unmute button. */
+  private playTile(v: HTMLVideoElement, unmute: HTMLButtonElement) {
+    v.play().catch(() => {
+      v.muted = true;
+      unmute.hidden = false;
+      void v.play().catch(() => { unmute.textContent = '▶️ Tap to play'; });
+    });
+  }
+
+  /** Show the tiles row as soon as there is a remote video (not only on the next panel render). */
+  private updateCallLayout() {
+    const on = this.inCall && this.tileEls.size > 0;
+    if (document.body.classList.contains('inCall') !== on) {
+      document.body.classList.toggle('inCall', on);
+      this.deps.layout();
+    }
   }
 
   // ------------------------------------------------------------------ render
   render(): void {
     const r = this.room;
     document.body.classList.toggle('inRoom', !!r);
-    document.body.classList.toggle('inCall', this.inCall && this.tileEls.size > 0);
+    this.updateCallLayout();
     this.panel.hidden = !r;
     if (!r || !r.state) { this.panel.replaceChildren(); return; }
     const s = r.state, m = r.match, me = this.uid!;
