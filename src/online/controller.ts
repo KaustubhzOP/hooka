@@ -48,6 +48,7 @@ export class OnlineController {
   private onVisibility = () => this.syncVideoSource();
   private camOn = true;
   private lastRender = 0;
+  private renderKey = '';
   invites: InviteRow[] = [];
 
   constructor(private account: AccountStore, private deps: OnlineDeps) {}
@@ -349,8 +350,14 @@ export class OnlineController {
     document.body.classList.toggle('inRoom', !!r);
     this.updateCallLayout();
     this.panel.hidden = !r;
-    if (!r || !r.state) { this.panel.replaceChildren(); return; }
+    if (!r || !r.state) { this.panel.replaceChildren(); this.renderKey = ''; return; }
     const s = r.state, m = r.match, me = this.uid!;
+    // Only rebuild the panel when something it shows has changed, so buttons aren't
+    // replaced under the user's finger by unrelated realtime updates.
+    const key = JSON.stringify([s, m.phase, m.turn, m.round, m.stats, m.left, [...r.present.entries()],
+      [...r.remoteStats.entries()], this.inCall, this.micOn, this.camOn, r.isAuthority]);
+    if (key === this.renderKey && this.panel.childElementCount) { this.renderStatus(); this.renderTiles(); return; }
+    this.renderKey = key;
     const auth = r.isAuthority;
     const link = `${location.origin}${location.pathname}?room=${s.code}`;
 
