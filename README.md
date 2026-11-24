@@ -119,9 +119,61 @@ camera ─► tracking.ts ─► signals.ts ─► machine.ts ─► effects.ts 
 | `src/game.ts` | scoring, ring combos, achievements, 2-player turns, persisted stats |
 | `src/audio.ts` | Web Audio, all procedural: bubbling, whoosh, cough, ring pop, slurp, coal crackle |
 | `src/ui.ts` | DOM: tabs, controls, HUD chips, toasts, cards, ring & landmark drawing |
+| `src/backend/supabase.ts` | Supabase client, auth helpers, typed database calls, error messages |
+| `src/social/*` | account store, sign-in / username / profile screens, leaderboard, friends, modal helpers |
+| `src/online/match.ts` | pure online match rules (turns, rounds, timer, standings) |
+| `src/online/room.ts` | room channel: presence, match events, host hand-over, call signalling |
+| `src/online/rtc.ts` | WebRTC mesh (perfect negotiation, STUN/TURN) |
+| `src/online/controller.ts` | lobby, room panel, call tiles, compositing your stage into the call video |
+| `supabase/migrations/*.sql` | the whole backend: tables, RLS, functions, realtime policies |
 | `src/main.ts` | wiring and the frame loop |
 
 **Layers:** video → backdrop (when on) → light → smoke (WebGL) → hookah + hose, ring, debug (2D) → HTML UI.
+
+## Accounts, leaderboard, friends and online play
+
+Solo play works without an account. Sign in (Google or email + password) to:
+
+- **Pick a unique username** (3–20 letters, numbers, `_`; case-insensitive; live availability check; change it once a week) and an avatar.
+- **Save runs to the leaderboard**: *Play → Finish & save run* (runs also save when you close the tab). Boards: this week / all time, everyone / friends.
+- **Friends**: search by username, send / accept / decline requests, remove, block, report. Badges show new requests and room invites in real time.
+- **Play online** (🌐): create a room (2–5 players), invite friends or share the link / 8-letter code. Modes:
+  - **🪈 Pass the hookah**: one player at a time; the hose passes after each hit; everyone watches.
+  - **⚡ Live challenge**: everyone at once, 45 s per round.
+  - Challenges: highest score, most rings, longest hold, most tricks. Results are saved to the leaderboard.
+- **Video call** (🎥 Join call): you see and hear each other; each tile shows that player's camera *with their smoke and hookah*.
+- **Same device** (Play → Same device): 2–4 players in front of one camera, left to right, taking turns.
+
+### Backend (Supabase)
+
+Everything lives in `supabase/migrations/` (one SQL file) and is applied to the project with the Supabase CLI
+(`supabase db push`) or the SQL editor. The frontend only knows the **publishable** key (`.env`); never put the
+secret / service-role key in the frontend or the repo.
+
+| table | holds |
+|---|---|
+| `profiles` | username (unique), avatar, last seen |
+| `friendships` | requests, friendships, blocks |
+| `rooms`, `room_members`, `room_invites` | online rooms (2–5 seats), invites |
+| `game_sessions`, `scores` | server-side game sessions and checked results |
+| `reports` | user reports (readable only by admins) |
+
+**Security**
+- Supabase Auth issues short-lived JWT access tokens (auto-refreshed); Postgres reads the user from the JWT (`auth.uid()`).
+- Row-level security on every table; clients have **no direct write access**. Every write goes through a `security definer` function that validates input, checks permissions (owner, friend, room member, host) and rate-limits per user.
+- Scores are checked for plausibility against a server-side session clock (max hits per second, rings per inhale, points per hit, hold length). A camera game scored on the client can't be fully cheat-proof, but this stops casual cheating.
+- Online rooms use **private** Realtime channels: only room members can join (`realtime.messages` policies).
+- Room codes are random, unguessable; only friends can be invited; blocked users can't find you or join your rooms.
+- Video and audio go peer-to-peer (WebRTC) and are never stored. Account deletion removes all your data.
+
+**Tests:** `supabase/tests/run.sh -h <socket dir> -p <port> -U postgres` runs the migration (twice) and ~70 security / behaviour checks against a throw-away Postgres with a Supabase stub.
+
+### One-time setup in the Supabase dashboard
+
+1. **Google sign-in** (free): Google Cloud Console → APIs & Services → Credentials → *Create OAuth client ID* (Web application), authorised redirect URI `https://<project>.supabase.co/auth/v1/callback`. Paste the client ID and secret into Supabase → Authentication → Sign In / Providers → Google, and enable it. Publish the OAuth consent screen so anyone can sign in.
+2. **URL configuration** (Authentication → URL Configuration): site URL and redirect URLs must include where the app runs (already set for `http://localhost:5173`; add the production URL when deploying).
+3. **Emails**: Supabase's built-in email sender is limited to a few emails per hour (fine for testing). For real users, add a free SMTP provider (e.g. Resend or Brevo free tiers) under Authentication → Emails → SMTP.
+4. **Calls on mobile data** (optional): set `VITE_TURN_URLS`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` in `.env` / the host's env to a TURN relay (free tiers: Metered.ca, Cloudflare). Without it calls use free public STUN servers, which work on most Wi-Fi.
 
 ## Deploying
 
@@ -137,4 +189,6 @@ works: the build command is `npm install && npm run build`, and the output direc
 - **2D only:** the smoke is a screen-space effect and won't go behind your head or hand.
 - **Background swap** is a soft cut-out; hair edges can bleed, and it costs frame rate, especially on phones.
 - **2 players** need both faces fully in frame. Player 1 is whoever is on the left of the screen.
+- **Online:** video calls are a mesh (each player sends to every other), so 5 players means 4 uploads each: fine on Wi-Fi, heavy on phones. Without a TURN relay some mobile networks can't connect.
+- **Score checks** stop implausible scores but can't prove a hit really happened on camera.
 - **Phones:** performance varies a lot; the particle count drops automatically when FPS is low. iOS needs Safari 15+.

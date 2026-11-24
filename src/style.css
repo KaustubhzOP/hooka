@@ -310,3 +310,6 @@ body.inCall .tiles { display: flex; gap: 10px; height: 26%; min-height: 120px; m
   .hideSm { display: none; }
   .avatarGrid { grid-template-columns: repeat(5, 1fr); }
 }
+@media (max-width: 1560px) { .ptxt { display: none; } }
+@media (max-width: 1400px) and (min-width: 1101px) { #boardBtn .lbl, #friendsBtn .lbl, #onlineBtn .lbl, #calBtn .lbl, #debugBtn .lbl, .actions kbd { display: none; } }
+.actions button { white-space: nowrap; }
