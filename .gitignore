@@ -4,3 +4,7 @@ public/mediapipe
 public/models
 *.part
 .DS_Store
+
+# local env overrides (may hold private values)
+.env.local
+.env.*.local
