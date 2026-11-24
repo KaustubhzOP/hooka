@@ -14,7 +14,7 @@ export function showAuth(account: AccountStore, mode: 'signin' | 'signup' | 'res
 
   const google = h('button', { class: 'google', type: 'button', onclick: async () => {
     st.set('Opening Google…');
-    try { await auth.google(); } catch (e) { st.set(friendlyError(e) + ' (Is Google sign-in enabled in Supabase? See the README.)', 'err'); }
+    try { await auth.google(); } catch (e) { st.set(friendlyError(e), 'err'); }
   } });
   google.innerHTML = `${GOOGLE_SVG}<span>Continue with Google</span>`;
 

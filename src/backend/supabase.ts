@@ -100,7 +100,15 @@ export const auth = {
   onChange(cb: (event: string, session: Session | null) => void) {
     return supabase?.auth.onAuthStateChange((event, session) => cb(event, session));
   },
+  /** Is Google sign-in switched on in the Supabase project? (checked before redirecting) */
+  async googleEnabled(): Promise<boolean> {
+    try {
+      const r = await fetch(`${URL}/auth/v1/settings`, { headers: { apikey: KEY! } });
+      return !!(await r.json())?.external?.google;
+    } catch { return true; }   // can't tell: let Supabase answer
+  },
   async google() {
+    if (!(await auth.googleEnabled())) throw new ApiError('google_disabled', 'Google sign-in isn’t switched on yet. Use email for now (the project owner enables Google in Supabase → Authentication → Providers).');
     const { error } = await client().auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });
     if (error) throw error;
   },
