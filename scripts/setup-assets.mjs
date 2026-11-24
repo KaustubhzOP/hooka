@@ -15,7 +15,9 @@ const MODELS = [
   ['face_landmarker.task',
    'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'],
   ['hand_landmarker.task',
-   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task']
+   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'],
+  ['selfie_segmenter.tflite',
+   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite']
 ];
 
 async function copyWasm() {
@@ -27,7 +29,7 @@ async function copyWasm() {
 
 async function download(name, url) {
   const out = join(modelDst, name);
-  if (existsSync(out) && (await stat(out)).size > 100_000) { console.log(`[assets] ${name} already present`); return true; }
+  if (existsSync(out) && (await stat(out)).size > 50_000) { console.log(`[assets] ${name} already present`); return true; }
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const res = await fetch(url);

@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0c10" />
+  <meta name="description" content="Virtual Hookah: a camera AR toy. Hold a pen like a hookah mouthpiece and blow virtual smoke, rings and dragon puffs. Just for fun, no smoking involved." />
   <title>Virtual Hookah</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🫧</text></svg>" />
 </head>
@@ -12,14 +14,17 @@
       <div class="brand">
         <span class="logo">🫧</span>
         <span class="name">Virtual Hookah</span>
-        <span class="privacy" title="Face and hand tracking run in your browser with WebAssembly. Nothing is uploaded.">🔒 Runs locally · no video leaves your device</span>
+        <span class="privacy" title="Face and hand tracking run in your browser with WebAssembly. Nothing is uploaded."><span class="lock">🔒</span><span class="ptxt"> Runs locally · no video leaves your device</span></span>
       </div>
       <div class="actions">
-        <button id="startBtn" class="primary">Start camera</button>
-        <button id="calBtn" disabled title="Guided 2-step lip calibration">Calibrate <kbd>C</kbd></button>
-        <button id="testBtn" title="Blow a test puff (works without a camera)">Test smoke <kbd>T</kbd></button>
-        <button id="muteBtn" title="Mute / unmute (M)">🔊 <kbd>M</kbd></button>
-        <button id="debugBtn" title="Debug panel (D)">Debug <kbd>D</kbd></button>
+        <button id="startBtn" class="primary"><span class="ic">📷</span><span class="lbl">Start camera</span></button>
+        <button id="boardBtn" title="Leaderboard"><span class="ic">🏆</span><span class="lbl">Leaderboard</span></button>
+        <button id="friendsBtn" title="Friends"><span class="ic">👥</span><span class="lbl">Friends</span><span class="badge2" id="friendsBadge" hidden></span></button>
+        <button id="onlineBtn" title="Play online with friends"><span class="ic">🌐</span><span class="lbl">Online</span><span class="badge2" id="onlineBadge" hidden></span></button>
+        <button id="calBtn" disabled title="Guided calibration of your lips, rings and nose"><span class="ic">🎛️</span><span class="lbl">Calibrate</span> <kbd>C</kbd></button>
+        <button id="muteBtn" title="Mute / unmute (M)"><span class="ic">🔊</span></button>
+        <button id="debugBtn" title="Debug panel (D)"><span class="ic">🛠️</span><span class="lbl">Debug</span> <kbd>D</kbd></button>
+        <button id="accountBtn" class="account" title="Your account"><span class="ic">👤</span><span class="lbl">Sign in</span></button>
       </div>
     </header>
 
@@ -27,53 +32,136 @@
       <section class="stageWrap" id="stageWrap">
         <div id="stage">
           <video id="video" playsinline muted></video>
+          <canvas id="bgCanvas"></canvas>
+          <canvas id="lightCanvas"></canvas>
           <canvas id="smokeCanvas"></canvas>
           <canvas id="fxCanvas"></canvas>
-          <div id="badge" class="badge st-IDLE"><i></i><span>IDLE</span></div>
+
+          <div class="hudTop">
+            <div id="badge" class="badge st-IDLE"><i></i><span>IDLE</span></div>
+            <div id="chips" class="chips"></div>
+          </div>
+          <div id="scorePill" class="scorePill"></div>
           <div id="fps" class="fps"></div>
+          <div id="toasts" class="toasts"></div>
+          <div id="turnBanner" class="turnBanner" hidden></div>
           <div id="hint" class="hint"></div>
           <div id="calCard" class="calCard" hidden>
-            <div class="calStep" id="calStep">Step 1 of 2</div>
+            <div class="calStep" id="calStep">Step 1 of 4</div>
             <div class="calText" id="calText"></div>
             <div class="calBar"><i id="calBar"></i></div>
+            <div class="calActions"><button id="calSkip">Skip step</button><button id="calCancel">Cancel</button></div>
           </div>
           <div id="card" class="card">
             <h1>Virtual Hookah</h1>
-            <p class="lead">Hold a real pen like a hookah mouthpiece. Your lips and hand drive a virtual inhale → hold → exhale, with smoke.</p>
+            <p class="lead">Hold a real pen like a hookah mouthpiece. Your lips and hand drive a virtual inhale → hold → exhale, with smoke, rings and tricks.</p>
             <ol class="steps">
-              <li><b>Bring the pen to your lips</b> and purse them, like sipping through it, to inhale.</li>
-              <li><b>Relax your lips</b> (or pull the pen away) to hold it in.</li>
-              <li><b>Purse your lips again</b> to blow the smoke out. Hold too long and you'll cough.</li>
+              <li><b>Pen to your lips</b> and sip through it to inhale.</li>
+              <li><b>Relax your lips</b> to hold the smoke.</li>
+              <li><b>Purse to blow</b>, make an <b>“O”</b> for rings, or <b>scrunch your nose</b> for dragon smoke.</li>
             </ol>
             <div class="cardActions"><button id="cardStart" class="primary big">Start camera</button></div>
             <p class="fine">🔒 Tracking runs entirely in your browser. No video or images leave your device.</p>
           </div>
         </div>
+        <div id="tiles" class="tiles"></div>
       </section>
 
+      <aside class="panel roomPanel" id="roomPanel" hidden></aside>
+
       <aside class="panel" id="panel">
-        <section>
-          <h2>Smoke</h2>
+        <section class="try">
+          <h2>Try it <span class="dim">(no camera needed)</span></h2>
+          <div class="tryRow">
+            <button data-try="smoke">💨 Smoke <kbd>T</kbd></button>
+            <button data-try="ring">⭕ Ring <kbd>O</kbd></button>
+            <button data-try="nose">🐉 Nose <kbd>N</kbd></button>
+            <button data-try="ghost">👻 Ghost <kbd>G</kbd></button>
+            <button data-try="french">🥖 French <kbd>F</kbd></button>
+            <button data-try="waterfall">🌊 Waterfall <kbd>W</kbd></button>
+          </div>
+        </section>
+
+        <nav class="tabs" role="tablist">
+          <button role="tab" data-tab="flavour" class="on">Flavour</button>
+          <button role="tab" data-tab="hookah">Hookah</button>
+          <button role="tab" data-tab="scene">Scene</button>
+          <button role="tab" data-tab="play">Play</button>
+          <button role="tab" data-tab="help">Help</button>
+        </nav>
+
+        <div class="tabPage" data-page="flavour">
           <div id="presets" class="presets"></div>
           <div class="row">
             <label class="chk"><input type="checkbox" id="customChk" /> Custom colour</label>
             <input type="color" id="customColor" value="#9fd8ff" />
           </div>
           <div id="smokeSliders"></div>
-        </section>
-        <section>
-          <h2>Grip</h2>
-          <label class="chk"><input type="checkbox" id="pinchChk" /> Require a pinch grip (thumb + index on the pen)</label>
-        </section>
-        <section>
-          <h2>Tips</h2>
+        </div>
+
+        <div class="tabPage" data-page="hookah" hidden>
+          <h3>Vase</h3>
+          <div id="skins" class="seg"></div>
+          <h3>Hose</h3>
+          <div id="hoses" class="swatches"></div>
+          <h3>Coals</h3>
+          <div class="sig"><span>Heat</span><div class="bar"><i id="heatBar" style="background:var(--orange)"></i></div><span id="heatVal">100%</span></div>
+          <div class="sig"><span>Fuel left</span><div class="bar"><i id="fuelBar" style="background:var(--amber)"></i></div><span id="fuelVal">100%</span></div>
+          <div class="row">
+            <button id="flipBtn">🔥 Flip coals</button>
+            <button id="freshBtn">🪨 Fresh coals</button>
+          </div>
+          <p class="hintTxt">Coals cool down and get ashy as you smoke, so the smoke gets thinner. Flip them: touch the bowl with your fingers on camera, tap it, or press <kbd>X</kbd>.</p>
+          <div id="hookahSliders"></div>
+          <label class="chk"><input type="checkbox" id="lightSmokeChk" /> Coals light up the smoke</label>
+        </div>
+
+        <div class="tabPage" data-page="scene" hidden>
+          <h3>Background</h3>
+          <div id="backgrounds" class="seg"></div>
+          <p class="hintTxt" id="bgNote">Cuts you out of the camera image (on your device) and puts you in a lounge.</p>
+          <h3>Lighting</h3>
+          <label class="chk"><input type="checkbox" id="faceLightChk" /> Coals light up your face</label>
+          <div id="sceneSliders"></div>
+        </div>
+
+        <div class="tabPage" data-page="play" hidden>
+          <h3>Mode</h3>
+          <div id="modes" class="seg"></div>
+          <div id="localCount" class="localCount" hidden>
+            <h3 id="localTitle">Players on this device</h3>
+            <p class="hintTxt" id="localHint"></p>
+            <div id="playerList" class="playerList"></div>
+            <form id="addPlayerForm" class="addPlayer">
+              <input id="addPlayerName" type="text" maxlength="16" placeholder="Player name" autocomplete="off" />
+              <button type="submit" class="primary" id="addPlayerBtn">＋ Add player</button>
+            </form>
+          </div>
+          <div id="scoreboard" class="scoreboard"></div>
+          <div id="runBox" class="runBox"></div>
+          <h3>Ring challenge</h3>
+          <div class="stats" id="stats"></div>
+          <h3>Achievements <span class="dim" id="achCount"></span></h3>
+          <div id="achievements" class="achievements"></div>
+          <div class="row"><button id="resetStats">Reset stats</button></div>
+        </div>
+
+        <div class="tabPage" data-page="help" hidden>
           <ul class="tips">
-            <li>Run <b>Calibrate</b> (<kbd>C</kbd>) once: it learns how pursed your lips look.</li>
-            <li>Face the camera with good, even light. Keep your hand in view.</li>
-            <li>Open the mouth wide while holding and the smoke leaks out.</li>
-            <li>Keys: <kbd>1</kbd>–<kbd>5</kbd> smoke · <kbd>R</kbd> reset · <kbd>L</kbd> landmarks</li>
+            <li><b>Calibrate first</b> (<kbd>C</kbd>): 4 short steps (relax, sip with the pen, “O”, scrunch nose). It learns your face, so every gesture is recognised reliably.</li>
+            <li><b>Inhale:</b> pen at your lips, sip. <b>Hold:</b> relax your lips.</li>
+            <li><b>Blow:</b> purse your lips (mouth nearly closed).</li>
+            <li><b>Rings:</b> make an “O” (lips round, jaw open). Close, then “O” again for the next ring. Each ring uses some smoke.</li>
+            <li><b>Dragon:</b> scrunch your nose to exhale through it. A little smoke also leaves your nose on every exhale.</li>
+            <li><b>French inhale:</b> while holding, tilt your head back with your mouth slightly open.</li>
+            <li><b>Ghost:</b> open your mouth wide: a ball of smoke rolls out. Sip quickly to pull it back in!</li>
+            <li><b>Waterfall:</b> tilt your head down while blowing.</li>
+            <li><b>Bend the smoke:</b> wave your hand through it, or blow at it after an exhale.</li>
+            <li>Hold too long and you cough. Watch the chips at the top: they show what the camera sees.</li>
+            <li>Good, even light on your face helps a lot. Keep the hand with the pen in view.</li>
           </ul>
-        </section>
+          <p class="hintTxt">Keys: <kbd>1</kbd>–<kbd>9</kbd> flavour · <kbd>C</kbd> calibrate · <kbd>X</kbd> flip coals · <kbd>R</kbd> reset · <kbd>L</kbd> landmarks · <kbd>M</kbd> mute · <kbd>D</kbd> debug</p>
+        </div>
       </aside>
 
       <aside class="panel debug" id="debug" hidden>
@@ -85,6 +173,7 @@
           <h2>Signals <span class="dim" id="fpsLine"></span></h2>
           <div id="signals"></div>
           <label class="chk"><input type="checkbox" id="lmChk" /> Draw landmarks overlay <kbd>L</kbd></label>
+          <label class="chk"><input type="checkbox" id="pinchChk" /> Require a pinch grip on the pen</label>
         </section>
         <section>
           <h2>Thresholds</h2>
@@ -103,7 +192,7 @@
 
     <footer class="foot">
       <span>Just for fun, no smoking involved. A camera toy: no tobacco, no real smoke, just pixels.</span>
-      <span class="dim">Face &amp; hand tracking by MediaPipe, on-device.</span>
+      <span class="dim"><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · Face &amp; hand tracking by MediaPipe, on-device.</span>
     </footer>
   </div>
   <script type="module" src="/src/main.ts"></script>
