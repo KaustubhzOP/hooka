@@ -40,7 +40,8 @@ export interface Settings {
   // scene & play
   background: BackgroundMode;
   playMode: PlayMode;
-  localPlayers: number;  // 2–4 on one device
+  localPlayers: number;  // number of same-device players (kept equal to playerNames.length)
+  playerNames: string[]; // same-device player names, 2–20
   // misc
   muted: boolean;
   showLandmarks: boolean;
@@ -78,6 +79,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   background: 'none' as BackgroundMode,
   playMode: 'solo' as PlayMode,
   localPlayers: 2,
+  playerNames: Object.freeze(['Player 1', 'Player 2']) as unknown as string[],
   muted: false,
   showLandmarks: false,
   debugOpen: false
@@ -103,7 +105,7 @@ export const RANGES = {
   noseSmoke:      { min: 0,    max: 1,   step: 0.05 },
   coalPower:      { min: 0.3,  max: 1.5, step: 0.05 },
   lightIntensity: { min: 0,    max: 1.5, step: 0.05 },
-  localPlayers:   { min: 2,    max: 4,   step: 1 }
+  localPlayers:   { min: 2,    max: 20,  step: 1 }
 } as const satisfies Partial<Record<keyof Settings, { min: number; max: number; step: number }>>;
 
 const ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
@@ -137,7 +139,20 @@ export function sanitizeSettings(raw: unknown): Settings {
     }
   }
   for (const k of ['smokePreset', 'vaseSkin', 'hoseColor'] as const) out[k] = Math.max(0, Math.round(out[k]));
+  out.playerNames = cleanPlayerNames(Array.isArray(src.playerNames) ? src.playerNames : null, Number(src.localPlayers) || 2);
+  out.localPlayers = out.playerNames.length;
   return out;
+}
+
+export const MAX_PLAYER_NAME = 16;
+export const MIN_LOCAL_PLAYERS = 2;
+export const MAX_LOCAL_PLAYERS = 20;
+
+/** Trim and clamp player names: 2–20 players, 1–16 characters each, defaults for blanks. */
+export function cleanPlayerNames(raw: unknown[] | null, count = 2): string[] {
+  const names = (raw ?? []).filter((v): v is string => typeof v === 'string').map(v => v.trim().slice(0, MAX_PLAYER_NAME)).slice(0, MAX_LOCAL_PLAYERS);
+  const n = Math.max(MIN_LOCAL_PLAYERS, raw ? names.length : Math.min(MAX_LOCAL_PLAYERS, count));
+  return Array.from({ length: n }, (_, i) => names[i] || `Player ${i + 1}`);
 }
 
 export function loadSettings(storage: Pick<Storage, 'getItem'> | null): Settings {

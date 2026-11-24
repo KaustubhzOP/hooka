@@ -2,7 +2,7 @@
  * Wiring: tracking → signals → state machine → effects/rendering + audio + game.
  */
 import './style.css';
-import { loadSettings, saveSettings, browserStorage, DEFAULT_SETTINGS, type Settings } from './settings';
+import { loadSettings, saveSettings, browserStorage, DEFAULT_SETTINGS, MAX_LOCAL_PLAYERS, MAX_PLAYER_NAME, type Settings } from './settings';
 import { Machine, DEFAULT_MACHINE_CONFIG, type MachineConfig, type MachineEvent } from './machine';
 import { SignalProcessor, emptySignals, type Signals, type TrackingFrame } from './signals';
 import { Calibration } from './calibration';
@@ -73,6 +73,8 @@ function persist() {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => saveSettings(storage, settings), 250);
 }
+// never lose the last change when the page closes or reloads within the debounce window
+addEventListener('pagehide', () => { clearTimeout(saveTimer); saveSettings(storage, settings); });
 
 function applySmokePreset() {
   smoke?.setPreset(resolvePreset(settings.smokePreset, settings.useCustomColor ? settings.customColor : null));
@@ -253,10 +255,29 @@ const ui: UI = new UI(settings, {
   freshCoals: () => { hookah.coals.fresh(); audio.ensure(); audio.crackle(); ui.log('fresh coals'); },
   resetStats: () => { game.resetStats(); renderGame(); },
   saveRun: () => void saveRun(),
+  addPlayer: name => {
+    if (!game.addPlayer(name)) { ui.toast(settings.playerNames.length >= MAX_LOCAL_PLAYERS ? 'Maximum 20 players' : 'Switch to Same device first'); return; }
+    storePlayers(); applyLocalTracking();
+    ui.toast(`👋 ${game.players[game.players.length - 1].name} joined`);
+  },
+  removePlayer: i => {
+    const name = game.players[i]?.name;
+    if (!game.removePlayer(i)) return;
+    storePlayers(); applyLocalTracking();
+    signals.reset(); machine.reset(); director?.reset();
+    ui.toast(`${name} left the game`);
+  },
+  renamePlayer: (i, name) => { game.renamePlayer(i, name.slice(0, MAX_PLAYER_NAME)); storePlayers(); },
   change: (k, v) => change(k, v)
 });
 
 function change<K extends keyof Settings>(key: K, value: Settings[K]) {
+  if (key === 'playMode' && value === 'online') {     // online is a room, not a stored mode: keep the current mode
+    online.openLobby();
+    ui.syncSettings();
+    ui.setOnlineActive(online.inRoom);
+    return;
+  }
   settings[key] = value;
   switch (key) {
     case 'blowOn': case 'requirePinch': case 'maxInhale': case 'maxHold':
@@ -270,16 +291,9 @@ function change<K extends keyof Settings>(key: K, value: Settings[K]) {
     case 'debugOpen': ui.setDebugOpen(settings.debugOpen); break;
     case 'background': void applyBackground(); break;
     case 'playMode':
-      if (settings.playMode === 'online') {           // online is a room, not a stored mode
-        settings.playMode = online.inRoom ? 'online' : 'solo';
-        online.openLobby();
-        ui.syncSettings();
-        ui.setOnlineActive(online.inRoom);
-        return;
-      }
       if (online.inRoom) { void online.leave(); }
       applyPlayMode(); break;
-    case 'localPlayers': applyPlayMode(); break;
+
   }
   ui.syncSettings();
   persist();
@@ -295,10 +309,10 @@ function onGameEvent(e: GameEvent) {
     case 'combo': if (e.rings > 1) ui.toast(`⭕ ×${e.rings} combo${e.best ? ' · new best!' : ''}`, 'combo'); break;
     case 'run': online.runUpdated(e.run, e.hitEnded); break;
     case 'turn': {
-      signals.slot = e.player;
+      signals.slot = localSlot(e.player);
       signals.reset();
       const name = game.players[e.player].name;
-      ui.turnBanner(`${name}, your turn! 🖊️ Pass the pen`);
+      ui.turnBanner(game.players.length <= 4 ? `${name}, your turn! 🖊️ Pass the pen` : `${name}, your turn! Step up to the camera 🖊️`);
       setTimeout(() => ui.turnBanner(null), 2200);
       ui.log(`turn → ${name}`);
       break;
@@ -311,18 +325,37 @@ function renderGame() {
   ui.renderGame(game, { signedIn: account.signedIn, hasProfile: !!account.profile, saving });
 }
 
-function localPlayers(): number { return settings.playMode === 'local' ? Math.max(2, Math.min(4, settings.localPlayers)) : 1; }
+/**
+ * Same-device turn detection. Up to 4 players sit side by side and are told apart by position
+ * (left → right). With more, players take turns stepping up to the camera: follow the nearest face.
+ */
+const SEATED_MAX = 4;
+function localSlot(turn: number): number { return game.players.length <= SEATED_MAX ? turn : -1; }
+function applyLocalTracking() {
+  if (game.mode !== 'local') return;
+  signals.slot = localSlot(game.turn);
+  void tracker.setNumFaces(Math.min(SEATED_MAX, game.players.length));
+  renderGame();
+}
+function storePlayers() {
+  settings.playerNames = game.players.map(p => p.name);
+  settings.localPlayers = settings.playerNames.length;
+  persist();
+}
 
 function applyPlayMode() {
   const mode = online.inRoom ? 'online' : settings.playMode === 'local' ? 'local' : 'solo';
   void autoSaveRun();
-  game.setMode(mode, localPlayers());
-  signals.slot = mode === 'local' ? game.turn : null;
+  game.setMode(mode, settings.playerNames);
+  signals.slot = mode === 'local' ? localSlot(game.turn) : null;
   signals.reset();
   machine.reset(); director?.reset();
-  void tracker.setNumFaces(mode === 'local' ? localPlayers() : 1);
+  void tracker.setNumFaces(mode === 'local' ? Math.min(SEATED_MAX, game.players.length) : 1);
   if (mode === 'local') {
-    ui.turnBanner(`${localPlayers()} players on this device: Player 1 is on the left, the hose passes left → right`);
+    const n = game.players.length;
+    ui.turnBanner(n <= SEATED_MAX
+      ? `${n} players: ${game.players[0].name} sits on the left, the hose passes left → right`
+      : `${n} players: pass the pen! ${game.players[0].name} goes first: step up to the camera`);
     setTimeout(() => ui.turnBanner(null), 2800);
   }
   runSession = null;
@@ -425,7 +458,7 @@ async function start() {
   ui.showCard({ title: 'Starting…', body: 'Loading the tracking models and asking for camera access.', busy: true });
   try {
     const [dims, delegate] = await Promise.all([tracker.startCamera(), tracker.loadModels()]);
-    await tracker.setNumFaces(game.mode === 'local' ? localPlayers() : 1);
+    await tracker.setNumFaces(game.mode === 'local' ? Math.min(SEATED_MAX, game.players.length) : 1);
     setResolution(dims.width, dims.height);
     signals.reset();
     running = true;

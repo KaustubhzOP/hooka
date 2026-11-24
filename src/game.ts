@@ -41,7 +41,7 @@ export interface Player { name: string; score: number; hits: number; bestRings: 
 export interface RunStats { score: number; rings: number; bestCombo: number; longestHold: number; hits: number; tricks: number }
 export const emptyRun = (): RunStats => ({ score: 0, rings: 0, bestCombo: 0, longestHold: 0, hits: 0, tricks: 0 });
 export type GameMode = 'solo' | 'local' | 'online';
-export const MAX_LOCAL_PLAYERS = 4;
+export const MAX_LOCAL_PLAYERS = 20;
 
 export type GameEvent =
   | { type: 'unlock'; achievement: Achievement }
@@ -77,14 +77,37 @@ export class Game {
 
   get current(): Player { return this.players[this.mode === 'local' ? this.turn : 0]; }
 
-  /** solo: 1 player; local: 2–4 players taking turns on this device; online: this device's player. */
-  setMode(mode: GameMode, localPlayers = 2): void {
+  /** solo: 1 player; local: 2–20 named players taking turns on this device; online: this device's player. */
+  setMode(mode: GameMode, localPlayers: number | string[] = 2): void {
     this.mode = mode;
     this.turn = 0;
-    const n = mode === 'local' ? Math.max(2, Math.min(MAX_LOCAL_PLAYERS, localPlayers)) : 1;
-    this.players = Array.from({ length: n }, (_, i) => newPlayer(i + 1));
+    const names = Array.isArray(localPlayers) ? localPlayers : [];
+    const count = Array.isArray(localPlayers) ? localPlayers.length : localPlayers;
+    const n = mode === 'local' ? Math.max(2, Math.min(MAX_LOCAL_PLAYERS, count)) : 1;
+    this.players = Array.from({ length: n }, (_, i) => ({ ...newPlayer(i + 1), ...(mode === 'local' && names[i] ? { name: names[i] } : {}) }));
     this.combo = 0;
     this.resetRun();
+  }
+
+  /** Same-device: add a player at the end (keeps everyone's score). */
+  addPlayer(name: string): boolean {
+    if (this.mode !== 'local' || this.players.length >= MAX_LOCAL_PLAYERS) return false;
+    this.players.push({ ...newPlayer(this.players.length + 1), name: name || `Player ${this.players.length + 1}` });
+    return true;
+  }
+
+  /** Same-device: remove a player (min 2), keeping the turn on the right person. */
+  removePlayer(index: number): boolean {
+    if (this.mode !== 'local' || this.players.length <= 2 || index < 0 || index >= this.players.length) return false;
+    this.players.splice(index, 1);
+    if (index < this.turn) this.turn--;
+    if (this.turn >= this.players.length) this.turn = 0;
+    return true;
+  }
+
+  renamePlayer(index: number, name: string): void {
+    const p = this.players[index];
+    if (p && name.trim()) p.name = name.trim();
   }
 
   resetRun(): void {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Game, STATS_KEY, type GameEvent } from '../src/game';
 import { Coals } from '../src/hookah';
+import { cleanPlayerNames, sanitizeSettings } from '../src/settings';
 
 function mem() {
   const m = new Map<string, string>();
@@ -74,6 +75,32 @@ describe('game', () => {
   });
 });
 
+describe('same-device players', () => {
+  it('uses the given names and supports up to 20 players', () => {
+    const g = new Game(null);
+    g.setMode('local', ['Ana', 'Ben', 'Cy']);
+    expect(g.players.map(p => p.name)).toEqual(['Ana', 'Ben', 'Cy']);
+    for (let i = 0; i < 30; i++) g.addPlayer(`P${i}`);
+    expect(g.players).toHaveLength(20);
+    expect(g.addPlayer('one too many')).toBe(false);
+  });
+
+  it('adding / removing keeps scores and the turn on the right person', () => {
+    const g = new Game(null);
+    g.setMode('local', ['Ana', 'Ben', 'Cy']);
+    g.exhale('blow', 1); g.hitEnd('exhaled', 1);        // Ana scored, Ben's turn
+    expect(g.current.name).toBe('Ben');
+    g.removePlayer(0);                                  // Ana leaves
+    expect(g.current.name).toBe('Ben');
+    g.addPlayer('Dee');
+    expect(g.players.map(p => p.name)).toEqual(['Ben', 'Cy', 'Dee']);
+    g.removePlayer(0); g.removePlayer(0);               // can't go below 2
+    expect(g.players).toHaveLength(2);
+    g.renamePlayer(0, '  Cyrus ');
+    expect(g.players[0].name).toBe('Cyrus');
+  });
+});
+
 describe('coals', () => {
   it('cool down while pulling, and flipping brings the heat back', () => {
     const c = new Coals();
@@ -93,5 +120,14 @@ describe('coals', () => {
     expect(c.flip()).toBe(false);
     c.fresh();
     expect(c.heat).toBe(1);
+  });
+});
+
+describe('player names in settings', () => {
+  it('cleans, clamps and fills names', () => {
+    expect(cleanPlayerNames(['  Ana ', '', 42 as unknown as string, 'A very long player name indeed'])).toEqual(['Ana', 'Player 2', 'A very long play']);
+    expect(cleanPlayerNames(Array.from({ length: 30 }, (_, i) => `p${i}`))).toHaveLength(20);
+    expect(cleanPlayerNames(null, 3)).toEqual(['Player 1', 'Player 2', 'Player 3']);
+    expect(sanitizeSettings({ playMode: 'duo' }).playerNames).toEqual(['Player 1', 'Player 2']);
   });
 });

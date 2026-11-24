@@ -147,7 +147,7 @@ Solo play works without an account. Sign in (Google or email + password) to:
   - **⚡ Live challenge**: everyone at once, 45 s per round.
   - Challenges: highest score, most rings, longest hold, most tricks. Results are saved to the leaderboard.
 - **Video call** (🎥 Join call): you see and hear each other; each tile shows that player's camera *with their smoke and hookah*.
-- **Same device** (Play → Same device): 2–4 players in front of one camera, left to right, taking turns.
+- **Same device** (Play → Same device): 2–20 named players taking turns on one camera. Add players with **＋ Add player**, rename them in place, remove with ✕. Up to 4 sit side by side (left → right); with 5 or more, the player whose turn it is steps up close to the camera (the app follows the nearest face).
 
 ### Backend (Supabase)
 

@@ -31,6 +31,9 @@ export interface UIHandlers {
   freshCoals(): void;
   resetStats(): void;
   saveRun(): void;
+  addPlayer(name: string): void;
+  removePlayer(index: number): void;
+  renamePlayer(index: number, name: string): void;
   change<K extends keyof Settings>(key: K, value: Settings[K]): void;
 }
 
@@ -74,7 +77,7 @@ export class UI {
   private hoseBtns: HTMLButtonElement[] = [];
   private bgBtns = new Map<BackgroundMode, HTMLButtonElement>();
   private modeBtns = new Map<PlayMode, HTMLButtonElement>();
-  private countBtns: HTMLButtonElement[] = [];
+  private editorKey = '';
   private logLines: string[] = [];
   private lastState = '';
   private lastHud = 0;
@@ -151,11 +154,13 @@ export class UI {
       b.onclick = () => h.change('playMode', mode);
       $('modes').appendChild(b); this.modeBtns.set(mode, b);
     }
-    for (let n = 2; n <= 4; n++) {
-      const b = el('button', '', `${n} players`) as HTMLButtonElement;
-      b.onclick = () => h.change('localPlayers', n);
-      $('localCountBtns').appendChild(b); this.countBtns.push(b);
-    }
+    $('addPlayerForm').onsubmit = (e: Event) => {
+      e.preventDefault();
+      const input = $<HTMLInputElement>('addPlayerName');
+      h.addPlayer(input.value.trim());
+      input.value = '';
+      input.focus();
+    };
 
     // debug
     const pinch = $<HTMLInputElement>('pinchChk');
@@ -205,7 +210,6 @@ export class UI {
     this.hoseBtns.forEach((b, i) => b.classList.toggle('sel', i === s.hoseColor));
     this.bgBtns.forEach((b, m) => b.classList.toggle('sel', m === s.background));
     this.modeBtns.forEach((b, m) => b.classList.toggle('sel', m === s.playMode));
-    this.countBtns.forEach((b, i) => b.classList.toggle('sel', i + 2 === s.localPlayers));
     $('localCount').hidden = s.playMode !== 'local';
     $<HTMLInputElement>('customChk').checked = s.useCustomColor;
     $<HTMLInputElement>('customColor').value = s.customColor;
@@ -304,6 +308,48 @@ export class UI {
     e.scrollTop = e.scrollHeight;
   }
 
+  /**
+   * Same-device player list: editable names, scores, remove buttons. Rows are only rebuilt when the
+   * player list changes, so typing a name isn't interrupted by score updates.
+   */
+  private renderPlayerEditor(g: Game): void {
+    const n = g.players.length;
+    const list = $('playerList');
+    const key = String(n);
+    if (key !== this.editorKey || list.children.length !== n) {
+      this.editorKey = key;
+      list.replaceChildren(...g.players.map((_, i) => {
+        const name = el('input', 'pname') as HTMLInputElement;
+        name.type = 'text'; name.maxLength = 16; name.setAttribute('aria-label', `Player ${i + 1} name`);
+        name.onchange = () => this.h.renamePlayer(i, name.value);
+        name.onkeydown = e => { if (e.key === 'Enter') name.blur(); };
+        const del = el('button', 'pdel', '✕') as HTMLButtonElement;
+        del.title = 'Remove player';
+        del.onclick = () => this.h.removePlayer(i);
+        const row = el('div', 'prow');
+        row.append(el('span', 'pturn'), name, el('span', 'pscore'), del);
+        return row;
+      }));
+    }
+    [...list.children].forEach((row, i) => {
+      const p = g.players[i];
+      row.classList.toggle('active', i === g.turn);
+      (row.querySelector('.pturn') as HTMLElement).textContent = i === g.turn ? '▶' : String(i + 1);
+      const input = row.querySelector('.pname') as HTMLInputElement;
+      if (document.activeElement !== input) input.value = p.name;
+      (row.querySelector('.pscore') as HTMLElement).innerHTML = `${p.hits} hits · ⭕${p.bestRings} · <b>${p.score}</b>`;
+      (row.querySelector('.pdel') as HTMLButtonElement).disabled = n <= 2;
+    });
+    const full = n >= 20;
+    $<HTMLButtonElement>('addPlayerBtn').disabled = full;
+    $<HTMLInputElement>('addPlayerName').disabled = full;
+    $<HTMLInputElement>('addPlayerName').placeholder = full ? 'Maximum 20 players' : `Player ${n + 1} name`;
+    $('localTitle').textContent = `Players on this device (${n}/20)`;
+    $('localHint').textContent = n <= 4
+      ? 'Sit side by side in front of the camera: player 1 on the left. The hose passes left → right after each hit.'
+      : 'Pass the pen: when it’s your turn, step up close to the camera. The app follows the face nearest the camera.';
+  }
+
   /** Coal meters in the Hookah tab. */
   setCoals(heat: number, fuel: number): void {
     $('heatBar').style.width = clamp01(heat) * 100 + '%';
@@ -321,16 +367,20 @@ export class UI {
   renderGame(g: Game, account?: { signedIn: boolean; hasProfile: boolean; saving: boolean }): void {
     const pill = $('scorePill');
     const multi = g.mode === 'local';
+    const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
     if (multi) {
-      pill.innerHTML = g.players.map((p, i) => `<div class="${i === g.turn ? 'act' : ''}">${i === g.turn ? '▶ ' : ''}${p.name}: ${p.score}</div>`).join('');
+      const cur = g.players[g.turn];
+      const leader = [...g.players].sort((a, b) => b.score - a.score)[0];
+      pill.innerHTML = g.players.length <= 4
+        ? g.players.map((p, i) => `<div class="${i === g.turn ? 'act' : ''}">${i === g.turn ? '▶ ' : ''}${esc(p.name)}: ${p.score}</div>`).join('')
+        : `<div class="act">▶ ${esc(cur.name)}: ${cur.score}</div><small>🏆 ${esc(leader.name)} ${leader.score} · ${g.players.length} players</small>`;
     } else {
       const p = g.players[0];
       pill.innerHTML = p.score || g.combo ? `${p.score} pts${g.combo ? `<small>⭕ ×${g.combo} · best ${g.stats.bestRings}</small>` : ''}` : '';
     }
     const board = $('scoreboard');
-    board.innerHTML = multi
-      ? g.players.map((p, i) => `<div class="player${i === g.turn ? ' active' : ''}"><span>${i === g.turn ? '▶ ' : ''}${p.name}</span><span>${p.hits} hits · best ⭕${p.bestRings} · <b>${p.score}</b></span></div>`).join('')
-      : `<div class="player"><span>This run</span><span>${g.run.hits} hits · ⭕${g.run.rings} · <b>${g.players[0].score}</b></span></div>`;
+    if (multi) { board.innerHTML = ''; this.renderPlayerEditor(g); }
+    else board.innerHTML = `<div class="player"><span>This run</span><span>${g.run.hits} hits · ⭕${g.run.rings} · <b>${g.players[0].score}</b></span></div>`;
     const box = $('runBox');
     box.replaceChildren();
     if (g.mode === 'solo') {

@@ -128,8 +128,15 @@
         <div class="tabPage" data-page="play" hidden>
           <h3>Mode</h3>
           <div id="modes" class="seg"></div>
-          <div id="localCount" class="localCount" hidden><span>Players on this device</span><div id="localCountBtns" class="seg small"></div>
-            <p class="hintTxt">Everyone in front of the same camera. Player 1 is on the left; the hose passes left → right after each hit.</p></div>
+          <div id="localCount" class="localCount" hidden>
+            <h3 id="localTitle">Players on this device</h3>
+            <p class="hintTxt" id="localHint"></p>
+            <div id="playerList" class="playerList"></div>
+            <form id="addPlayerForm" class="addPlayer">
+              <input id="addPlayerName" type="text" maxlength="16" placeholder="Player name" autocomplete="off" />
+              <button type="submit" class="primary" id="addPlayerBtn">＋ Add player</button>
+            </form>
+          </div>
           <div id="scoreboard" class="scoreboard"></div>
           <div id="runBox" class="runBox"></div>
           <h3>Ring challenge</h3>

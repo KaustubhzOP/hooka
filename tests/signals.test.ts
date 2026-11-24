@@ -88,6 +88,9 @@ describe('signals', () => {
     for (const [f, x] of [[left, 0.8], [right, 0.2]] as const) { f.landmarks[234] = { x: x + 0.1, y: 0.5 }; f.landmarks[454] = { x: x - 0.1, y: 0.5 }; }
     expect(selectFace([right, left], 0, null, W)).toBe(left);
     expect(selectFace([right, left], 1, null, W)).toBe(right);
+    // slot -1 = the face closest to the camera (the widest one)
+    right.landmarks[234] = { x: 0.4, y: 0.5 }; right.landmarks[454] = { x: 0.0, y: 0.5 };
+    expect(selectFace([left, right], -1, null, W)).toBe(right);
   });
 
   it('reports the pinch grip', () => {

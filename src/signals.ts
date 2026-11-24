@@ -140,6 +140,7 @@ export function estimatePen(hand: Landmark[], W: number, H: number, penExt: numb
   return { grip, tip, dir, handSize, pinch, dist: d };
 }
 
+const faceSpan = (f: FaceObservation) => Math.abs(f.landmarks[LM.faceLeft].x - f.landmarks[LM.faceRight].x);
 const faceCenterX = (f: FaceObservation) => 1 - (f.landmarks[LM.faceLeft].x + f.landmarks[LM.faceRight].x) / 2;
 
 /**
@@ -151,6 +152,7 @@ export function selectFace(faces: FaceObservation[], slot: number | null, lastMo
   if (!ok.length) return null;
   if (ok.length === 1) return ok[0];
   const sorted = [...ok].sort((a, b) => faceCenterX(a) - faceCenterX(b));
+  if (slot === -1) return ok.reduce((big, f) => faceSpan(f) > faceSpan(big) ? f : big);   // closest to the camera
   if (slot != null) return sorted[Math.min(slot, sorted.length - 1)];
   if (lastMouthX == null) return sorted[0];
   return sorted.reduce((best, f) => Math.abs(faceCenterX(f) * W - lastMouthX) < Math.abs(faceCenterX(best) * W - lastMouthX) ? f : best);
@@ -170,7 +172,7 @@ export class SignalProcessor {
   private aim: Pt = { x: 0, y: 0.15 };
   private rawPitch = 0;
   private prevHands: HandMotion[] = [];
-  /** 2-player: which face to follow (0 = left, 1 = right); null = single player. */
+  /** Same-device: which face to follow (0 = leftmost …; -1 = the face closest to the camera); null = single player. */
   slot: number | null = null;
 
   reset(): void {
