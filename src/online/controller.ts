@@ -22,6 +22,8 @@ export interface OnlineDeps {
   matchStarted(roomId: string): void;
   matchFinished(): void;
   layout(): void;
+  /** The raw camera track (sent instead of the composited stage while the tab is hidden). */
+  cameraTrack(): MediaStreamTrack | null;
 }
 
 export interface Layer { src: CanvasImageSource; mirror?: boolean; blend?: GlobalCompositeOperation; visible?: boolean }
@@ -39,6 +41,11 @@ export class OnlineController {
   private outStream: MediaStream | null = null;
   private mic: MediaStream | null = null;
   private micOn = true;
+  private canvasTrack: MediaStreamTrack | null = null;
+  private sendingCamera = false;
+  private lastComposite = 0;
+  private watchdog = 0;
+  private onVisibility = () => this.syncVideoSource();
   private camOn = true;
   private lastRender = 0;
   invites: InviteRow[] = [];
@@ -198,9 +205,17 @@ export class OnlineController {
       this.deps.toast('Microphone blocked: you can still be seen, but not heard.');
       this.mic = null;
     }
+    // draw a first frame right away so friends never get an empty (black) canvas
+    this.drawPlaceholder(this.callCanvas.width === 300 ? 640 : this.callCanvas.width, this.callCanvas.width === 300 ? 360 : this.callCanvas.height);
     const video = this.callCanvas.captureStream(20);
+    this.canvasTrack = video.getVideoTracks()[0] ?? null;
     this.outStream = new MediaStream([...video.getVideoTracks(), ...(this.mic?.getAudioTracks() ?? [])]);
     this.micOn = !!this.mic; this.camOn = true;
+    this.sendingCamera = false;
+    this.lastComposite = performance.now();
+    document.addEventListener('visibilitychange', this.onVisibility);
+    clearInterval(this.watchdog);
+    this.watchdog = window.setInterval(() => this.syncVideoSource(), 1000);
     const servers = await fetchIceServers();
     await r.joinCall(this.outStream, servers);
     this.deps.log(`joined the call (${r.mesh?.hasRelay ? 'with TURN relay' : 'STUN only: may fail on some mobile networks'})`);
@@ -208,6 +223,9 @@ export class OnlineController {
   }
 
   stopCall(): void {
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    clearInterval(this.watchdog);
+    this.canvasTrack = null; this.sendingCamera = false;
     this.room?.leaveCall();
     this.mic?.getTracks().forEach(t => t.stop());
     this.outStream?.getVideoTracks().forEach(t => t.stop());
@@ -218,19 +236,55 @@ export class OnlineController {
 
   get inCall() { return !!this.room?.callActive; }
 
-  /** Draw this frame of the stage into the outgoing call video. */
-  composite(layers: Layer[], W: number, H: number): void {
-    if (!this.inCall) return;
-    const cw = 640, ch = Math.round(640 * H / W);
+  /**
+   * Browsers stop drawing in hidden / minimised / fully covered tabs, so the composited
+   * stage freezes. Then we send the plain camera instead (your face without the smoke),
+   * and switch back to the stage as soon as it is drawing again.
+   */
+  private syncVideoSource() {
+    const mesh = this.room?.mesh;
+    if (!mesh || !this.canvasTrack) return;
+    const stalled = document.hidden || performance.now() - this.lastComposite > 1500;
+    const cam = this.deps.cameraTrack();
+    const useCamera = stalled && !!cam && cam.readyState === 'live' && this.camOn;
+    if (useCamera === this.sendingCamera) return;
+    this.sendingCamera = useCamera;
+    mesh.replaceLocal(new MediaStream([useCamera ? cam! : this.canvasTrack, ...(this.mic?.getAudioTracks() ?? [])]));
+    this.deps.log(useCamera ? 'call: tab not drawing → sending plain camera' : 'call: sending the stage again (camera + smoke)');
+  }
+
+  private drawPlaceholder(cw: number, ch: number, text = 'camera not started yet') {
     if (this.callCanvas.width !== cw || this.callCanvas.height !== ch) { this.callCanvas.width = cw; this.callCanvas.height = ch; }
     const g = this.callCtx;
     g.globalCompositeOperation = 'source-over';
-    g.fillStyle = '#000'; g.fillRect(0, 0, cw, ch);
-    if (!this.camOn) {
-      g.fillStyle = '#fff'; g.font = '28px system-ui'; g.textAlign = 'center';
-      g.fillText(`${this.account.profile?.avatar ?? '🙂'} camera off`, cw / 2, ch / 2);
-      return;
+    const bg = g.createLinearGradient(0, 0, 0, ch);
+    bg.addColorStop(0, '#1b1c26'); bg.addColorStop(1, '#0b0c10');
+    g.fillStyle = bg; g.fillRect(0, 0, cw, ch);
+    g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `${Math.round(ch * 0.22)}px system-ui`;
+    g.fillText(this.account.profile?.avatar ?? '🙂', cw / 2, ch * 0.42);
+    g.font = `600 ${Math.round(ch * 0.065)}px system-ui`;
+    g.fillText(this.account.profile?.username ?? '', cw / 2, ch * 0.66);
+    g.fillStyle = '#8b8ea0';
+    g.font = `${Math.round(ch * 0.05)}px system-ui`;
+    g.fillText(text, cw / 2, ch * 0.76);
+  }
+
+  /** Draw this frame of the stage into the outgoing call video. `cameraReady`: the camera is producing frames. */
+  composite(layers: Layer[], W: number, H: number, cameraReady = true): void {
+    if (!this.inCall) return;
+    this.lastComposite = performance.now();
+    if (this.sendingCamera) this.syncVideoSource();
+    const cw = 640, ch = Math.round(640 * H / W);
+    if (!this.camOn || !cameraReady) {
+      this.drawPlaceholder(cw, ch, this.camOn ? 'camera not started yet' : 'camera off');
+      if (!this.camOn) return;
+      layers = layers.slice(1);                          // still show the hookah and smoke
     }
+    if (this.callCanvas.width !== cw || this.callCanvas.height !== ch) { this.callCanvas.width = cw; this.callCanvas.height = ch; }
+    const g = this.callCtx;
+    g.globalCompositeOperation = 'source-over';
+    if (cameraReady) { g.fillStyle = '#000'; g.fillRect(0, 0, cw, ch); }
     for (const l of layers) {
       if (l.visible === false) continue;
       g.save();
@@ -255,7 +309,10 @@ export class OnlineController {
         video.muted = false;
         void video.play().then(() => { unmute.hidden = true; }).catch(() => {});
       } }, '🔇 Tap to unmute');
-      tile = h('div', { class: 'tile', 'data-user': user }, video, unmute, h('div', { class: 'tileLabel' }));
+      tile = h('div', { class: 'tile novideo', 'data-user': user }, video, unmute, h('div', { class: 'tileWait' }, 'Connecting video…'), h('div', { class: 'tileLabel' }));
+      const t = tile;
+      const check = () => t.classList.toggle('novideo', !(video.videoWidth > 0 && video.readyState >= 2));
+      for (const ev of ['loadeddata', 'resize', 'playing', 'emptied']) video.addEventListener(ev, check);
       this.tiles.append(tile);
       this.tileEls.set(user, tile);
     }

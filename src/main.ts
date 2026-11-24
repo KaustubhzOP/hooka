@@ -119,7 +119,8 @@ const online = new OnlineController(account, {
         .catch(e => ui.log('submit_score: ' + friendlyError(e)));
     }
   },
-  layout: () => fitStage()
+  layout: () => fitStage(),
+  cameraTrack: () => tracker.stream?.getVideoTracks()[0] ?? null
 });
 
 /** A server-side game session bounds what a run can plausibly score (see submit_score). */
@@ -621,7 +622,7 @@ function loop(now: number) {
     { src: lightCanvas, blend: 'screen' },
     { src: smokeCanvas },
     { src: fxCanvas }
-  ], W, H);
+  ], W, H, running && video.readyState >= 2 && video.videoWidth > 0);
 
   // fingers in the bowl flip the coals
   if (running && sig.hands.length) {

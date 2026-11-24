@@ -318,3 +318,6 @@ body.inCall .tiles { display: flex; gap: 10px; height: 26%; min-height: 120px; m
 
 .tile .unmute { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); padding: 6px 12px; font-size: 13px;
   background: rgba(8,9,14,.82); border-color: var(--amber); white-space: nowrap; z-index: 2; }
+
+.tileWait { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--dim); font-size: 13px; background: #0b0c10; }
+.tile.novideo .tileWait { display: flex; }
