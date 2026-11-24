@@ -207,6 +207,18 @@ function stopNotifications() {
   setBadge('friendsBadge', 0); setBadge('onlineBadge', 0);
 }
 
+/**
+ * New accounts must pick a username. Right after signing in, the sign-in window may still be
+ * closing, so wait until no other window is open before asking (once per session).
+ */
+let usernameAsked = false;
+function askForUsername(tries = 0) {
+  if (usernameAsked || !account.needsUsername) return;
+  if (isModalOpen() && tries < 40) { setTimeout(() => askForUsername(tries + 1), 250); return; }
+  usernameAsked = true;
+  showUsername(account, true);
+}
+
 async function initAccount() {
   const social = ['boardBtn', 'friendsBtn', 'onlineBtn', 'accountBtn'];
   if (!backendEnabled) { social.forEach(id => { $(id).hidden = true; }); return; }
@@ -219,13 +231,14 @@ async function initAccount() {
   account.on((a, event) => {
     renderAccount();
     if (event === 'recovery') showNewPassword();
-    if (a.needsUsername && !isModalOpen()) showUsername(a, true);
+    if (a.needsUsername) askForUsername();
     if (a.canPlayOnline) {
       startNotifications();
       if (running) void ensureRunSession();
       if (pendingRoomCode && !pendingRoomTried && !online.inRoom) { pendingRoomTried = true; void online.join(pendingRoomCode); }
     } else {
       stopNotifications();
+      if (event === 'SIGNED_OUT') usernameAsked = false;
       if (event === 'SIGNED_OUT' && online.inRoom) void online.leave();
     }
     renderGame();
