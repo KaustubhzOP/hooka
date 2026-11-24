@@ -1,7 +1,7 @@
 # Notes for Claude
 
 ## Git commits
-- Commit as the repository owner: `KaustubhzOP <223641892+KaustubhzOP@users.noreply.github.com>`
+- Commit as the repository owner: `KaustubhzOP <2024.kaustubh.patil@ves.ac.in>`
   (set with `git config user.name` / `git config user.email` before committing if it isn't already).
 - Do **not** add `Co-Authored-By: Claude …` or `Claude-Session: …` trailers to commit messages,
   and don't add "Generated with Claude Code" lines to pull request descriptions.
