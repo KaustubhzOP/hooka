@@ -12,7 +12,21 @@ export type Signal =
   | { kind: 'candidate'; from: string; to: string; candidate: RTCIceCandidateInit | null }
   | { kind: 'bye'; from: string; to: string };
 
-/** Free public STUN servers, plus an optional TURN relay from the env (needed behind strict NATs / mobile data). */
+/**
+ * ICE servers: free public STUN, plus short-lived TURN relay credentials from our
+ * `turn-credentials` edge function (keeps the relay's API key server-side), plus an
+ * optional static TURN relay from the env. TURN is what makes calls work on mobile data.
+ */
+export async function fetchIceServers(): Promise<RTCIceServer[]> {
+  const servers = iceServers();
+  try {
+    const { supabase } = await import('../backend/supabase');
+    const { data, error } = await supabase!.functions.invoke('turn-credentials', { method: 'POST' });
+    if (!error && Array.isArray(data?.iceServers)) servers.push(...data.iceServers);
+  } catch { /* STUN only */ }
+  return servers;
+}
+
 export function iceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
   const urls = (import.meta.env.VITE_TURN_URLS as string | undefined)?.split(',').map(s => s.trim()).filter(Boolean);
@@ -34,7 +48,11 @@ export class Mesh {
   onStream: (peerId: string, stream: MediaStream | null) => void = () => {};
   onState: (peerId: string, state: RTCPeerConnectionState) => void = () => {};
 
-  constructor(private self: string, private send: (s: Signal) => void, private local: MediaStream) {}
+  constructor(private self: string, private send: (s: Signal) => void, private local: MediaStream,
+              private servers: RTCIceServer[] = iceServers()) {}
+
+  /** True when a TURN relay is available (calls can cross mobile networks). */
+  get hasRelay(): boolean { return this.servers.some(s => [s.urls].flat().some(u => String(u).startsWith('turn'))); }
 
   get peerIds(): string[] { return [...this.peers.keys()]; }
 
@@ -88,7 +106,7 @@ export class Mesh {
   }
 
   private connect(id: string): Peer {
-    const pc = new RTCPeerConnection({ iceServers: iceServers() });
+    const pc = new RTCPeerConnection({ iceServers: this.servers });
     const p: Peer = { pc, polite: this.self > id, makingOffer: false, ignoreOffer: false, stream: new MediaStream() };
     this.peers.set(id, p);
     for (const t of this.local.getTracks()) pc.addTrack(t, this.local);

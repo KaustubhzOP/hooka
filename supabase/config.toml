@@ -1,0 +1,5 @@
+# Supabase CLI config (used for deploying edge functions: `npx supabase functions deploy --project-ref <ref> --use-api`)
+project_id = "virtual-hookah"
+
+[functions.turn-credentials]
+verify_jwt = true

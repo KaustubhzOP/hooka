@@ -114,9 +114,9 @@ export class RoomClient {
   }
 
   // ----------------------------------------------------------------------- call
-  async joinCall(local: MediaStream): Promise<void> {
+  async joinCall(local: MediaStream, servers?: RTCIceServer[]): Promise<void> {
     this.mesh?.close();
-    const mesh = new Mesh(this.uid, s => this.broadcast('rtc', s), local);
+    const mesh = new Mesh(this.uid, s => this.broadcast('rtc', s), local, servers);
     mesh.onStream = (u, st) => this.hooks.remoteStream(u, st);
     this.mesh = mesh;
     this.inCall = true;

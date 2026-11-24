@@ -9,6 +9,7 @@ import { showAuth, showUsername } from '../social/account-ui';
 import { showFriends } from '../social/social-ui';
 import { h, openModal, status } from '../social/modal';
 import { RoomClient } from './room';
+import { fetchIceServers } from './rtc';
 import { canPlay, activePlayer, standings, metric, CHALLENGE_LABEL, LIVE_ROUND_SECONDS, type MatchState, type MatchEvent, type Challenge, type MatchMode } from './match';
 import type { RunStats } from '../game';
 
@@ -200,8 +201,9 @@ export class OnlineController {
     const video = this.callCanvas.captureStream(20);
     this.outStream = new MediaStream([...video.getVideoTracks(), ...(this.mic?.getAudioTracks() ?? [])]);
     this.micOn = !!this.mic; this.camOn = true;
-    await r.joinCall(this.outStream);
-    this.deps.log('joined the call');
+    const servers = await fetchIceServers();
+    await r.joinCall(this.outStream, servers);
+    this.deps.log(`joined the call (${r.mesh?.hasRelay ? 'with TURN relay' : 'STUN only: may fail on some mobile networks'})`);
     this.render(); this.deps.layout();
   }
 
