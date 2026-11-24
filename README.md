@@ -31,6 +31,11 @@ run `npm run setup-assets` again.
 **On a phone:** the camera needs `https`, so test the deployed site, or run `npm run dev -- --host` and open it through
 an https tunnel. Plain `http://192.168…` won't get camera access.
 
+**Testing on a phone before deploying:** with `npm run dev` running, start a free temporary tunnel in a second terminal:
+`npx cloudflared tunnel --url http://localhost:5173` (or `brew install cloudflared` first). Open the printed
+`https://….trycloudflare.com` address on the phone. Email + password sign-in works right away; for Google sign-in that exact
+address must be added to Supabase → Authentication → URL Configuration → Redirect URLs.
+
 | command | what it does |
 |---|---|
 | `npm test` | Vitest unit tests (state machine, signals, calibration, settings, game, coals) |
