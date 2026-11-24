@@ -158,8 +158,8 @@ export class Tracker {
     return { width: v.videoWidth, height: v.videoHeight };
   }
 
-  /** Track one face, or two for 2-player mode. */
-  async setNumFaces(n: 1 | 2): Promise<void> {
+  /** Track one face, or up to 4 for same-device multiplayer. */
+  async setNumFaces(n: number): Promise<void> {
     this.numFaces = n;
     if (this.face) await this.face.setOptions({ numFaces: n });
   }

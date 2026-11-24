@@ -30,6 +30,7 @@ export interface UIHandlers {
   flipCoals(): void;
   freshCoals(): void;
   resetStats(): void;
+  saveRun(): void;
   change<K extends keyof Settings>(key: K, value: Settings[K]): void;
 }
 
@@ -53,7 +54,7 @@ const SIGNAL_ROWS: [string, string][] = [
 const CHIPS: [string, string][] = [['face', '🙂 Face'], ['pen', '🖊️ Pen'], ['sip', '😗 Sip'], ['oh', '⭕ O'], ['nose', '👃 Scrunch'], ['head', '↕ Head']];
 
 const BACKGROUNDS: [BackgroundMode, string][] = [['none', 'Camera'], ['blur', 'Blur'], ['lounge', 'Lounge'], ['neon', 'Neon bar']];
-const MODES: [PlayMode, string][] = [['solo', '🙂 Solo'], ['duo', '👥 2 players']];
+const MODES: [PlayMode, string][] = [['solo', '🙂 Solo'], ['local', '👥 Same device'], ['online', '🌐 Online']];
 
 export const HINTS: Record<State, string> = {
   IDLE: 'Bring the pen to your lips and sip to inhale…',
@@ -73,6 +74,7 @@ export class UI {
   private hoseBtns: HTMLButtonElement[] = [];
   private bgBtns = new Map<BackgroundMode, HTMLButtonElement>();
   private modeBtns = new Map<PlayMode, HTMLButtonElement>();
+  private countBtns: HTMLButtonElement[] = [];
   private logLines: string[] = [];
   private lastState = '';
   private lastHud = 0;
@@ -149,6 +151,11 @@ export class UI {
       b.onclick = () => h.change('playMode', mode);
       $('modes').appendChild(b); this.modeBtns.set(mode, b);
     }
+    for (let n = 2; n <= 4; n++) {
+      const b = el('button', '', `${n} players`) as HTMLButtonElement;
+      b.onclick = () => h.change('localPlayers', n);
+      $('localCountBtns').appendChild(b); this.countBtns.push(b);
+    }
 
     // debug
     const pinch = $<HTMLInputElement>('pinchChk');
@@ -198,6 +205,8 @@ export class UI {
     this.hoseBtns.forEach((b, i) => b.classList.toggle('sel', i === s.hoseColor));
     this.bgBtns.forEach((b, m) => b.classList.toggle('sel', m === s.background));
     this.modeBtns.forEach((b, m) => b.classList.toggle('sel', m === s.playMode));
+    this.countBtns.forEach((b, i) => b.classList.toggle('sel', i + 2 === s.localPlayers));
+    $('localCount').hidden = s.playMode !== 'local';
     $<HTMLInputElement>('customChk').checked = s.useCustomColor;
     $<HTMLInputElement>('customColor').value = s.customColor;
     $<HTMLInputElement>('pinchChk').checked = s.requirePinch;
@@ -303,19 +312,38 @@ export class UI {
     $('fuelVal').textContent = Math.round(fuel * 100) + '%';
   }
 
+  /** Mark the Online mode button while in a room. */
+  setOnlineActive(on: boolean): void {
+    this.modeBtns.forEach((b, m) => b.classList.toggle('sel', on ? m === 'online' : m === this.s.playMode));
+  }
+
   /** Score pill on the stage + Play tab contents. */
-  renderGame(g: Game): void {
+  renderGame(g: Game, account?: { signedIn: boolean; hasProfile: boolean; saving: boolean }): void {
     const pill = $('scorePill');
-    if (g.mode === 'duo') {
+    const multi = g.mode === 'local';
+    if (multi) {
       pill.innerHTML = g.players.map((p, i) => `<div class="${i === g.turn ? 'act' : ''}">${i === g.turn ? '▶ ' : ''}${p.name}: ${p.score}</div>`).join('');
     } else {
       const p = g.players[0];
       pill.innerHTML = p.score || g.combo ? `${p.score} pts${g.combo ? `<small>⭕ ×${g.combo} · best ${g.stats.bestRings}</small>` : ''}` : '';
     }
     const board = $('scoreboard');
-    board.innerHTML = g.mode === 'duo'
+    board.innerHTML = multi
       ? g.players.map((p, i) => `<div class="player${i === g.turn ? ' active' : ''}"><span>${i === g.turn ? '▶ ' : ''}${p.name}</span><span>${p.hits} hits · best ⭕${p.bestRings} · <b>${p.score}</b></span></div>`).join('')
-      : `<div class="player"><span>Score</span><b>${g.players[0].score}</b></div>`;
+      : `<div class="player"><span>This run</span><span>${g.run.hits} hits · ⭕${g.run.rings} · <b>${g.players[0].score}</b></span></div>`;
+    const box = $('runBox');
+    box.replaceChildren();
+    if (g.mode === 'solo') {
+      const btn = el('button', 'primary', account?.saving ? 'Saving…' : '🏁 Finish & save run') as HTMLButtonElement;
+      btn.disabled = !!account?.saving || g.run.hits === 0;
+      btn.onclick = () => this.h.saveRun();
+      box.append(btn, el('p', 'hintTxt', !account?.signedIn
+        ? 'Sign in to save your runs to the leaderboard.'
+        : !account.hasProfile ? 'Pick a username to get on the leaderboard.'
+        : 'Your best run goes on the leaderboard. Runs also save automatically when you close the tab.'));
+    } else if (g.mode === 'local') {
+      box.append(el('p', 'hintTxt', 'Same-device games are just for fun and are not saved to the leaderboard.'));
+    }
     const st = g.stats;
     $('stats').innerHTML = [
       [st.bestRings, 'Best rings / inhale'], [st.totalRings, 'Rings blown'],

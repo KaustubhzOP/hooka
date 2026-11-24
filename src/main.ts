@@ -16,6 +16,12 @@ import { Backdrop } from './background';
 import { drawLighting } from './lighting';
 import { Game, type GameEvent } from './game';
 import { UI, HINTS, drawRing, drawLandmarks, type TryKind } from './ui';
+import { api, backendEnabled, friendlyError, rpcKeepalive, supabase } from './backend/supabase';
+import { AccountStore } from './social/account';
+import { showAuth, showUsername, showProfile, showNewPassword } from './social/account-ui';
+import { showLeaderboard, showFriends } from './social/social-ui';
+import { isModalOpen } from './social/modal';
+import { OnlineController } from './online/controller';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const DEG = Math.PI / 180;
@@ -74,6 +80,157 @@ function applySmokePreset() {
 
 const game = new Game(storage, onGameEvent);
 
+/* -------------------------------------------------- accounts, scores, online */
+const account = new AccountStore();
+let runSession: string | null = null;
+let runSessionPending: Promise<string | null> | null = null;
+let saving = false;
+const pendingRoomCode = new URLSearchParams(location.search).get('room')?.toUpperCase().replace(/[^A-Z2-9]/g, '') || null;
+let pendingRoomTried = false;
+
+const online = new OnlineController(account, {
+  toast: t => ui.toast(t),
+  log: t => ui.log(t),
+  banner: (text, ms = 2200) => { ui.turnBanner(text); if (text) setTimeout(() => ui.turnBanner(null), ms); },
+  enteredRoom: () => {
+    void autoSaveRun();
+    ui.setOnlineActive(true);
+    game.setMode('online');
+    signals.slot = null; signals.reset();
+    machine.reset(); director?.reset();
+    void tracker.setNumFaces(1);
+    if (!running) flashHint('Start the camera to play in the room.', 4000);
+    renderGame();
+  },
+  leftRoom: () => { ui.setOnlineActive(false); applyPlayMode(); },
+  matchStarted: roomId => {
+    game.setMode('online');
+    machine.reset(); director?.reset();
+    runSession = null;
+    api.startGame('online', roomId).then(id => { runSession = id; }).catch(e => ui.log('start_game: ' + friendlyError(e)));
+    renderGame();
+  },
+  matchFinished: () => {
+    const id = runSession;
+    runSession = null;
+    if (id && game.run.hits > 0) {
+      api.submitScore(id, game.run)
+        .then(r => { if (r.saved) ui.toast(`Score saved to the leaderboard: ${game.run.score} pts${r.personal_best ? ' · personal best!' : ''}`); })
+        .catch(e => ui.log('submit_score: ' + friendlyError(e)));
+    }
+  },
+  layout: () => fitStage()
+});
+
+/** A server-side game session bounds what a run can plausibly score (see submit_score). */
+async function ensureRunSession(): Promise<void> {
+  if (runSession || !account.canPlayOnline || game.mode !== 'solo') return;
+  runSessionPending ??= api.startGame('solo')
+    .then(id => (runSession = id))
+    .catch(e => { ui.log('start_game: ' + friendlyError(e)); return null; })
+    .finally(() => { runSessionPending = null; });
+  await runSessionPending;
+}
+
+async function saveRun(): Promise<void> {
+  if (!account.signedIn) { showAuth(account, 'signin', 'Sign in to save your runs to the leaderboard.'); return; }
+  if (!account.profile) { showUsername(account, true); return; }
+  if (game.run.hits === 0 || saving) return;
+  saving = true; renderGame();
+  try {
+    await ensureRunSession();
+    if (!runSession) throw new Error('Could not start a game session. Try again.');
+    const run = { ...game.run };
+    const r = await api.submitScore(runSession, run);
+    ui.toast(r.saved ? `🏁 Run saved: ${run.score} pts${r.personal_best ? ' · personal best!' : ''}${r.rank ? ` · rank #${r.rank}` : ''}` : 'Nothing to save yet');
+    game.resetRun();
+  } catch (e) {
+    ui.toast(friendlyError(e));
+    if ((e as { code?: string }).code === 'implausible_score' || (e as { code?: string }).code === 'already_submitted') game.resetRun();
+  } finally {
+    saving = false; runSession = null; renderGame();
+    void ensureRunSession();
+  }
+}
+
+/** Save a solo run quietly (mode switch, tab closing). */
+async function autoSaveRun(keepalive = false): Promise<void> {
+  if (!runSession || game.mode !== 'solo' || game.run.hits === 0) return;
+  const id = runSession, r = game.run;
+  runSession = null;
+  const args = { p_session: id, p_score: Math.round(r.score), p_rings: r.rings, p_best_combo: r.bestCombo, p_longest_hold: Math.round(r.longestHold * 10) / 10, p_hits: r.hits };
+  if (keepalive) await rpcKeepalive('submit_score', args);
+  else await api.submitScore(id, r).catch(() => {});
+}
+addEventListener('pagehide', () => { void autoSaveRun(true); });
+
+function renderAccount() {
+  const btn = $('accountBtn');
+  const lbl = btn.querySelector('.lbl')!, ic = btn.querySelector('.ic')!;
+  if (account.profile) { ic.textContent = account.profile.avatar; lbl.textContent = account.profile.username; }
+  else if (account.signedIn) { ic.textContent = '👤'; lbl.textContent = 'Pick username'; }
+  else { ic.textContent = '👤'; lbl.textContent = 'Sign in'; }
+}
+
+// notifications: friend requests and room invites (realtime + a slow poll as a fallback)
+let notifyTimer = 0;
+let notifyChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+let knownInvites: Set<number> | null = null;
+const setBadge = (id: string, n: number) => { const b = $(id); b.hidden = n === 0; b.textContent = String(n); };
+async function pollNotifications() {
+  if (!account.canPlayOnline) return;
+  try {
+    const [friends, invites] = await Promise.all([api.myFriends(), api.myInvites()]);
+    setBadge('friendsBadge', friends.filter(f => f.status === 'pending' && f.direction === 'incoming').length);
+    setBadge('onlineBadge', invites.length);
+    if (knownInvites) for (const i of invites) if (!knownInvites.has(i.invite_id)) ui.toast(`🌐 ${i.from_username} invited you to play: press Online`);
+    knownInvites = new Set(invites.map(i => i.invite_id));
+  } catch { /* offline */ }
+}
+function startNotifications() {
+  if (notifyTimer || !supabase || !account.uid) return;
+  void pollNotifications();
+  notifyTimer = window.setInterval(() => void pollNotifications(), 30_000);
+  const uid = account.uid;
+  notifyChannel = supabase.channel(`notify-${uid}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'room_invites', filter: `to_user=eq.${uid}` }, () => void pollNotifications())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships', filter: `addressee=eq.${uid}` }, () => void pollNotifications())
+    .subscribe();
+}
+function stopNotifications() {
+  clearInterval(notifyTimer); notifyTimer = 0;
+  if (notifyChannel) void supabase?.removeChannel(notifyChannel);
+  notifyChannel = null; knownInvites = null;
+  setBadge('friendsBadge', 0); setBadge('onlineBadge', 0);
+}
+
+async function initAccount() {
+  const social = ['boardBtn', 'friendsBtn', 'onlineBtn', 'accountBtn'];
+  if (!backendEnabled) { social.forEach(id => { $(id).hidden = true; }); return; }
+  $('boardBtn').onclick = () => showLeaderboard(account);
+  $('friendsBtn').onclick = () => showFriends(account, online.inRoom && online.room?.id
+    ? { invite: uid => api.inviteToRoom(online.room!.id!, uid), onChange: () => void pollNotifications() }
+    : { onChange: () => void pollNotifications() });
+  $('onlineBtn').onclick = () => online.inRoom ? $('roomPanel').scrollIntoView({ behavior: 'smooth' }) : online.openLobby();
+  $('accountBtn').onclick = () => account.signedIn ? showProfile(account) : showAuth(account, 'signin');
+  account.on((a, event) => {
+    renderAccount();
+    if (event === 'recovery') showNewPassword();
+    if (a.needsUsername && !isModalOpen()) showUsername(a, true);
+    if (a.canPlayOnline) {
+      startNotifications();
+      if (running) void ensureRunSession();
+      if (pendingRoomCode && !pendingRoomTried && !online.inRoom) { pendingRoomTried = true; void online.join(pendingRoomCode); }
+    } else {
+      stopNotifications();
+      if (event === 'SIGNED_OUT' && online.inRoom) void online.leave();
+    }
+    renderGame();
+  });
+  await account.init();
+  if (pendingRoomCode && !account.signedIn) showAuth(account, 'signin', `Sign in to join room ${pendingRoomCode}.`);
+}
+
 const ui: UI = new UI(settings, {
   start: () => void start(),
   calibrate: () => startCalibration(),
@@ -93,7 +250,8 @@ const ui: UI = new UI(settings, {
   },
   flipCoals: () => flipCoals('button'),
   freshCoals: () => { hookah.coals.fresh(); audio.ensure(); audio.crackle(); ui.log('fresh coals'); },
-  resetStats: () => { game.resetStats(); ui.renderGame(game); },
+  resetStats: () => { game.resetStats(); renderGame(); },
+  saveRun: () => void saveRun(),
   change: (k, v) => change(k, v)
 });
 
@@ -110,7 +268,17 @@ function change<K extends keyof Settings>(key: K, value: Settings[K]) {
     case 'muted': audio.setMuted(settings.muted); ui.setMuted(settings.muted); break;
     case 'debugOpen': ui.setDebugOpen(settings.debugOpen); break;
     case 'background': void applyBackground(); break;
-    case 'playMode': applyPlayMode(); break;
+    case 'playMode':
+      if (settings.playMode === 'online') {           // online is a room, not a stored mode
+        settings.playMode = online.inRoom ? 'online' : 'solo';
+        online.openLobby();
+        ui.syncSettings();
+        ui.setOnlineActive(online.inRoom);
+        return;
+      }
+      if (online.inRoom) { void online.leave(); }
+      applyPlayMode(); break;
+    case 'localPlayers': applyPlayMode(); break;
   }
   ui.syncSettings();
   persist();
@@ -124,6 +292,7 @@ function onGameEvent(e: GameEvent) {
     case 'unlock': ui.toast(`${e.achievement.emoji} Achievement: ${e.achievement.name}`); ui.log('achievement: ' + e.achievement.name); break;
     case 'points': if (e.points) ui.toast(`${e.points > 0 ? '+' : ''}${e.points} ${e.label}`, 'pts'); break;
     case 'combo': if (e.rings > 1) ui.toast(`⭕ ×${e.rings} combo${e.best ? ' · new best!' : ''}`, 'combo'); break;
+    case 'run': online.runUpdated(e.run, e.hitEnded); break;
     case 'turn': {
       signals.slot = e.player;
       signals.reset();
@@ -134,20 +303,29 @@ function onGameEvent(e: GameEvent) {
       break;
     }
   }
-  ui.renderGame(game);
+  renderGame();
 }
 
+function renderGame() {
+  ui.renderGame(game, { signedIn: account.signedIn, hasProfile: !!account.profile, saving });
+}
+
+function localPlayers(): number { return settings.playMode === 'local' ? Math.max(2, Math.min(4, settings.localPlayers)) : 1; }
+
 function applyPlayMode() {
-  game.setMode(settings.playMode);
-  signals.slot = settings.playMode === 'duo' ? game.turn : null;
+  const mode = online.inRoom ? 'online' : settings.playMode === 'local' ? 'local' : 'solo';
+  void autoSaveRun();
+  game.setMode(mode, localPlayers());
+  signals.slot = mode === 'local' ? game.turn : null;
   signals.reset();
   machine.reset(); director?.reset();
-  void tracker.setNumFaces(settings.playMode === 'duo' ? 2 : 1);
-  if (settings.playMode === 'duo') {
-    ui.turnBanner('2 players: Player 1 is on the left, Player 2 on the right');
-    setTimeout(() => ui.turnBanner(null), 2600);
+  void tracker.setNumFaces(mode === 'local' ? localPlayers() : 1);
+  if (mode === 'local') {
+    ui.turnBanner(`${localPlayers()} players on this device: Player 1 is on the left, the hose passes left → right`);
+    setTimeout(() => ui.turnBanner(null), 2800);
   }
-  ui.renderGame(game);
+  runSession = null;
+  renderGame();
 }
 
 async function applyBackground() {
@@ -203,7 +381,7 @@ function onMachineEvent(e: MachineEvent) {
       if (e.active) { audio.slurp(); game.trick('french'); }
       break;
     case 'hitEnd':
-      if (!demo) game.hitEnd(e.outcome, e.held);
+      if (!demo) { game.hitEnd(e.outcome, e.held); if (game.mode === 'solo') void ensureRunSession(); }
       demo = false;
       break;
   }
@@ -216,7 +394,9 @@ function fitStage() {
   const cs = getComputedStyle(wrap);
   const aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
   const narrow = window.matchMedia('(max-width: 900px)').matches;
-  const ah = narrow ? window.innerHeight * 0.72 : wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const tiles = document.getElementById('tiles')!;
+  const tilesH = document.body.classList.contains('inCall') ? tiles.offsetHeight + 10 : 0;
+  const ah = (narrow ? window.innerHeight * 0.72 : wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) - tilesH;
   const ar = W / H;
   const w = Math.max(200, Math.min(aw, ah * ar));
   stage.style.width = Math.floor(w) + 'px';
@@ -244,11 +424,12 @@ async function start() {
   ui.showCard({ title: 'Starting…', body: 'Loading the tracking models and asking for camera access.', busy: true });
   try {
     const [dims, delegate] = await Promise.all([tracker.startCamera(), tracker.loadModels()]);
-    await tracker.setNumFaces(settings.playMode === 'duo' ? 2 : 1);
+    await tracker.setNumFaces(game.mode === 'local' ? localPlayers() : 1);
     setResolution(dims.width, dims.height);
     signals.reset();
     running = true;
     ui.setRunning(true);
+    void ensureRunSession();
     ui.showCard(null);
     ui.log(`camera ${dims.width}×${dims.height}, models on ${delegate}${IS_MOBILE ? ' (mobile)' : ''}`);
     flashHint(settings.calibrated
@@ -384,7 +565,9 @@ function loop(now: number) {
 
   // 2. signals → state machine (or calibration)
   if (calibration.active) stepCalibration(dt);
+  else if (online.inRoom && !online.canPlay() && machine.state === 'IDLE') machine.cooldown = 0.2;   // not your turn: wait
   else machine.step(dt, sig);
+  online.tick(now);
 
   // 3. smoke
   const geo = faceGeometry(sig, W, H, running);
@@ -432,6 +615,14 @@ function loop(now: number) {
     for (const face of lastFrame.faces) drawLandmarks(fx, face.landmarks, [], LIP_CONNECTIONS, HAND_CONNECTIONS, { ...sig, pen: null }, W, H);
   }
 
+  // outgoing call video: the whole stage (camera + light + smoke + hookah)
+  if (online.inCall) online.composite([
+    bgActive ? { src: $<HTMLCanvasElement>('bgCanvas') } : { src: video, mirror: true },
+    { src: lightCanvas, blend: 'screen' },
+    { src: smokeCanvas },
+    { src: fxCanvas }
+  ], W, H);
+
   // fingers in the bowl flip the coals
   if (running && sig.hands.length) {
     const b = Hookah.bowlRect(W, H);
@@ -458,7 +649,9 @@ function adaptQuality() {
 function currentHint(now: number): string {
   if (now < flash.until) return flash.text;
   if (!running || calibration.active) return '';
-  const who = settings.playMode === 'duo' ? `${game.players[game.turn].name}: ` : '';
+  const wait = online.waitingText();
+  if (wait && machine.state === 'IDLE') return wait;
+  const who = game.mode === 'local' ? `${game.players[game.turn].name}: ` : '';
   if (!sig.faceVisible) return who + 'I can’t see your face: face the camera, with light in front of you.';
   if (machine.state === 'IDLE') {
     if (hookah.coals.burntOut) return 'The coals are burnt out: get fresh coals in the Hookah tab.';
@@ -471,7 +664,7 @@ function currentHint(now: number): string {
 /* ------------------------------------------------------------------- keys */
 addEventListener('keydown', e => {
   const t = e.target as HTMLElement;
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || isModalOpen()) return;
   if (t instanceof HTMLInputElement && !['range', 'checkbox'].includes(t.type)) return;
   if (t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
   const k = e.key.toLowerCase();
@@ -507,11 +700,10 @@ try {
   flashHint('WebGL is unavailable in this browser, so the smoke cannot be drawn.', 8000);
 }
 setResolution(W, H);
-game.setMode(settings.playMode);
-signals.slot = settings.playMode === 'duo' ? 0 : null;
-ui.renderGame(game);
+applyPlayMode();
+void initAccount();
 ui.log('ready: press “Start camera”');
 requestAnimationFrame(loop);
 
 // Dev-only handle for poking at the app from the console / browser tests.
-if (import.meta.env.DEV) Object.assign(window, { __hookah: { machine, audio, settings, calibration, game, hookah, signals, get smoke() { return smoke; }, get director() { return director; }, get sig() { return sig; }, get frame() { return lastFrame; } } });
+if (import.meta.env.DEV) Object.assign(window, { __hookah: { account, online, machine, audio, settings, calibration, game, hookah, signals, get smoke() { return smoke; }, get director() { return director; }, get sig() { return sig; }, get frame() { return lastFrame; } } });

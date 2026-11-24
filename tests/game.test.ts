@@ -30,10 +30,27 @@ describe('game', () => {
     expect(g.current.score).toBe(25);
   });
 
+  it('passes the turn between 3 players on one device', () => {
+    const g = new Game(null);
+    g.setMode('local', 3);
+    expect(g.players).toHaveLength(3);
+    for (const expected of [1, 2, 0]) { g.exhale('blow', 1); g.hitEnd('exhaled', 1); expect(g.turn).toBe(expected); }
+    expect(g.stats.unlocked).toContain('duo');
+  });
+
+  it('tracks the run for leaderboard submission', () => {
+    const g = new Game(null);
+    g.ring(1); g.ring(2); g.trick('french'); g.exhale('blow', 4.2); g.hitEnd('exhaled', 4.2);
+    expect(g.run).toEqual({ score: 15 + 30 + 15 + 10 + 13, rings: 2, bestCombo: 2, longestHold: 4.2, hits: 1, tricks: 1 });
+    g.resetRun();
+    expect(g.run.score).toBe(0);
+    expect(g.current.score).toBe(0);
+  });
+
   it('passes the turn in 2-player mode', () => {
     const events: GameEvent[] = [];
     const g = new Game(null, e => events.push(e));
-    g.setMode('duo');
+    g.setMode('local', 2);
     g.exhale('blow', 2);
     g.hitEnd('exhaled', 2);
     expect(g.turn).toBe(1);

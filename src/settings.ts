@@ -4,7 +4,7 @@
  */
 
 export type BackgroundMode = 'none' | 'blur' | 'lounge' | 'neon';
-export type PlayMode = 'solo' | 'duo';
+export type PlayMode = 'solo' | 'local' | 'online';
 
 export interface Settings {
   // detection thresholds
@@ -40,6 +40,7 @@ export interface Settings {
   // scene & play
   background: BackgroundMode;
   playMode: PlayMode;
+  localPlayers: number;  // 2–4 on one device
   // misc
   muted: boolean;
   showLandmarks: boolean;
@@ -76,6 +77,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   lightIntensity: 0.6,
   background: 'none' as BackgroundMode,
   playMode: 'solo' as PlayMode,
+  localPlayers: 2,
   muted: false,
   showLandmarks: false,
   debugOpen: false
@@ -100,12 +102,13 @@ export const RANGES = {
   spread:         { min: 0.2,  max: 2.5, step: 0.05 },
   noseSmoke:      { min: 0,    max: 1,   step: 0.05 },
   coalPower:      { min: 0.3,  max: 1.5, step: 0.05 },
-  lightIntensity: { min: 0,    max: 1.5, step: 0.05 }
+  lightIntensity: { min: 0,    max: 1.5, step: 0.05 },
+  localPlayers:   { min: 2,    max: 4,   step: 1 }
 } as const satisfies Partial<Record<keyof Settings, { min: number; max: number; step: number }>>;
 
 const ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   background: ['none', 'blur', 'lounge', 'neon'],
-  playMode: ['solo', 'duo']
+  playMode: ['solo', 'local', 'online']
 };
 
 export const STORAGE_KEY = 'virtual-hookah.settings.v2';
@@ -114,7 +117,9 @@ export const STORAGE_KEY = 'virtual-hookah.settings.v2';
 export function sanitizeSettings(raw: unknown): Settings {
   const out: Settings = { ...DEFAULT_SETTINGS };
   if (!raw || typeof raw !== 'object') return out;
-  const src = raw as Record<string, unknown>;
+  const src = { ...(raw as Record<string, unknown>) };
+  if (src.playMode === 'duo') { src.playMode = 'local'; src.localPlayers = 2; }   // v2 → v3
+  if (src.playMode === 'online') src.playMode = 'solo';                        // never resume straight into a room
   const o = out as unknown as Record<string, unknown>;
   for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof Settings)[]) {
     const v = src[key];

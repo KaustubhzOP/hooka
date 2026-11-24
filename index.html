@@ -18,9 +18,13 @@
       </div>
       <div class="actions">
         <button id="startBtn" class="primary"><span class="ic">📷</span><span class="lbl">Start camera</span></button>
+        <button id="boardBtn" title="Leaderboard"><span class="ic">🏆</span><span class="lbl">Leaderboard</span></button>
+        <button id="friendsBtn" title="Friends"><span class="ic">👥</span><span class="lbl">Friends</span><span class="badge2" id="friendsBadge" hidden></span></button>
+        <button id="onlineBtn" title="Play online with friends"><span class="ic">🌐</span><span class="lbl">Online</span><span class="badge2" id="onlineBadge" hidden></span></button>
         <button id="calBtn" disabled title="Guided calibration of your lips, rings and nose"><span class="ic">🎛️</span><span class="lbl">Calibrate</span> <kbd>C</kbd></button>
         <button id="muteBtn" title="Mute / unmute (M)"><span class="ic">🔊</span></button>
         <button id="debugBtn" title="Debug panel (D)"><span class="ic">🛠️</span><span class="lbl">Debug</span> <kbd>D</kbd></button>
+        <button id="accountBtn" class="account" title="Your account"><span class="ic">👤</span><span class="lbl">Sign in</span></button>
       </div>
     </header>
 
@@ -60,7 +64,10 @@
             <p class="fine">🔒 Tracking runs entirely in your browser. No video or images leave your device.</p>
           </div>
         </div>
+        <div id="tiles" class="tiles"></div>
       </section>
+
+      <aside class="panel roomPanel" id="roomPanel" hidden></aside>
 
       <aside class="panel" id="panel">
         <section class="try">
@@ -121,7 +128,10 @@
         <div class="tabPage" data-page="play" hidden>
           <h3>Mode</h3>
           <div id="modes" class="seg"></div>
+          <div id="localCount" class="localCount" hidden><span>Players on this device</span><div id="localCountBtns" class="seg small"></div>
+            <p class="hintTxt">Everyone in front of the same camera. Player 1 is on the left; the hose passes left → right after each hit.</p></div>
           <div id="scoreboard" class="scoreboard"></div>
+          <div id="runBox" class="runBox"></div>
           <h3>Ring challenge</h3>
           <div class="stats" id="stats"></div>
           <h3>Achievements <span class="dim" id="achCount"></span></h3>

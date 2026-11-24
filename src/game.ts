@@ -37,20 +37,31 @@ export interface Stats {
 
 export interface Player { name: string; score: number; hits: number; bestRings: number }
 
+/** Totals for the current run (what gets submitted to the leaderboard). */
+export interface RunStats { score: number; rings: number; bestCombo: number; longestHold: number; hits: number; tricks: number }
+export const emptyRun = (): RunStats => ({ score: 0, rings: 0, bestCombo: 0, longestHold: 0, hits: 0, tricks: 0 });
+export type GameMode = 'solo' | 'local' | 'online';
+export const MAX_LOCAL_PLAYERS = 4;
+
 export type GameEvent =
   | { type: 'unlock'; achievement: Achievement }
   | { type: 'points'; points: number; label: string; player: number }
   | { type: 'combo'; rings: number; best: boolean }
-  | { type: 'turn'; player: number };
+  | { type: 'turn'; player: number }
+  /** Something about the run changed (online mode broadcasts it). */
+  | { type: 'run'; run: RunStats; hitEnded: boolean };
 
 export const STATS_KEY = 'virtual-hookah.stats.v1';
+const newPlayer = (n: number): Player => ({ name: `Player ${n}`, score: 0, hits: 0, bestRings: 0 });
 const emptyStats = (): Stats => ({ bestRings: 0, totalRings: 0, bestHold: 0, bestScore: 0, hits: 0, flavours: [], unlocked: [] });
 
 export class Game {
   stats: Stats;
-  mode: 'solo' | 'duo' = 'solo';
-  players: Player[] = [{ name: 'Player 1', score: 0, hits: 0, bestRings: 0 }, { name: 'Player 2', score: 0, hits: 0, bestRings: 0 }];
+  mode: GameMode = 'solo';
+  players: Player[] = [newPlayer(1)];
   turn = 0;
+  /** This device's run (solo / online). */
+  run: RunStats = emptyRun();
   /** Rings in the current hit (the combo). */
   combo = 0;
   private heldThisHit = 0;
@@ -64,12 +75,22 @@ export class Game {
     } catch { /* ignore */ }
   }
 
-  get current(): Player { return this.players[this.mode === 'duo' ? this.turn : 0]; }
+  get current(): Player { return this.players[this.mode === 'local' ? this.turn : 0]; }
 
-  setMode(mode: 'solo' | 'duo'): void {
+  /** solo: 1 player; local: 2–4 players taking turns on this device; online: this device's player. */
+  setMode(mode: GameMode, localPlayers = 2): void {
     this.mode = mode;
     this.turn = 0;
+    const n = mode === 'local' ? Math.max(2, Math.min(MAX_LOCAL_PLAYERS, localPlayers)) : 1;
+    this.players = Array.from({ length: n }, (_, i) => newPlayer(i + 1));
+    this.combo = 0;
+    this.resetRun();
+  }
+
+  resetRun(): void {
+    this.run = emptyRun();
     this.players.forEach(p => { p.score = 0; p.hits = 0; p.bestRings = 0; });
+    this.tricksThisHit.clear();
     this.combo = 0;
   }
 
@@ -86,14 +107,18 @@ export class Game {
   private add(points: number, label: string) {
     const p = this.current;
     p.score = Math.max(0, p.score + points);
+    if (this.mode !== 'local') this.run.score = p.score;
     this.stats.bestScore = Math.max(this.stats.bestScore, p.score);
-    this.emit({ type: 'points', points, label, player: this.mode === 'duo' ? this.turn : 0 });
+    this.emit({ type: 'points', points, label, player: this.mode === 'local' ? this.turn : 0 });
+    if (this.mode !== 'local') this.emit({ type: 'run', run: { ...this.run }, hitEnded: false });
   }
 
   /** A ring was puffed; index = rings so far in this hit. */
   ring(index: number): void {
     this.combo = index;
     this.stats.totalRings++;
+    this.run.rings++;
+    this.run.bestCombo = Math.max(this.run.bestCombo, index);
     const best = index > this.stats.bestRings;
     if (best) this.stats.bestRings = index;
     this.current.bestRings = Math.max(this.current.bestRings, index);
@@ -117,6 +142,7 @@ export class Game {
     this.unlock(id);
     if (this.tricksThisHit.has(id)) return;
     this.tricksThisHit.add(id);
+    if (id !== 'stir' && id !== 'gust') this.run.tricks++;
     const pts = { french: 15, ghost: 20, waterfall: 10, stir: 0, gust: 0 }[id];
     if (pts) this.add(pts, id === 'ghost' ? 'ghost recalled' : id);
   }
@@ -129,16 +155,19 @@ export class Game {
   /** The hit is over: book-keeping, and in 2-player mode pass the hose. */
   hitEnd(outcome: 'exhaled' | 'rings' | 'ghostLost' | 'rejected', held: number): void {
     if (outcome === 'rejected') return;
+    const hold = held || this.heldThisHit;
     this.stats.hits++;
-    this.stats.bestHold = Math.max(this.stats.bestHold, held || this.heldThisHit);
+    this.stats.bestHold = Math.max(this.stats.bestHold, hold);
     this.current.hits++;
+    this.run.hits++;
+    if (outcome !== 'ghostLost') this.run.longestHold = Math.max(this.run.longestHold, Math.min(15, hold));
     if (outcome === 'exhaled' || outcome === 'rings') this.unlock('first_hit');
     this.combo = 0; this.heldThisHit = 0; this.tricksThisHit.clear();
-    if (this.mode === 'duo') {
-      if (this.turn === 1) this.unlock('duo');
-      this.turn = 1 - this.turn;
+    if (this.mode === 'local') {
+      if (this.turn === this.players.length - 1) this.unlock('duo');
+      this.turn = (this.turn + 1) % this.players.length;
       this.emit({ type: 'turn', player: this.turn });
-    }
+    } else this.emit({ type: 'run', run: { ...this.run }, hitEnded: true });
     this.save();
   }
 

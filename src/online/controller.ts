@@ -1,0 +1,349 @@
+/**
+ * Online play: lobby (create / join / invites), the room panel, the call
+ * tiles, and the compositor that sends your stage (camera + smoke + hookah)
+ * as your call video.
+ */
+import { api, friendlyError, type InviteRow } from '../backend/supabase';
+import type { AccountStore } from '../social/account';
+import { showAuth, showUsername } from '../social/account-ui';
+import { showFriends } from '../social/social-ui';
+import { h, openModal, status } from '../social/modal';
+import { RoomClient } from './room';
+import { canPlay, activePlayer, standings, metric, CHALLENGE_LABEL, LIVE_ROUND_SECONDS, type MatchState, type MatchEvent, type Challenge, type MatchMode } from './match';
+import type { RunStats } from '../game';
+
+export interface OnlineDeps {
+  toast(text: string): void;
+  log(text: string): void;
+  banner(text: string | null, ms?: number): void;
+  enteredRoom(): void;
+  leftRoom(): void;
+  matchStarted(roomId: string): void;
+  matchFinished(): void;
+  layout(): void;
+}
+
+export interface Layer { src: CanvasImageSource; mirror?: boolean; blend?: GlobalCompositeOperation; visible?: boolean }
+
+const MODE_LABEL: Record<MatchMode, string> = { pass: '🪈 Pass the hookah (turns)', live: '⚡ Live challenge (all at once)' };
+const REACTIONS = ['👏', '🔥', '😂', '😮', '👑', '💨'];
+
+export class OnlineController {
+  room: RoomClient | null = null;
+  private panel = document.getElementById('roomPanel')!;
+  private tiles = document.getElementById('tiles')!;
+  private tileEls = new Map<string, HTMLElement>();
+  private callCanvas = document.createElement('canvas');
+  private callCtx = this.callCanvas.getContext('2d')!;
+  private outStream: MediaStream | null = null;
+  private mic: MediaStream | null = null;
+  private micOn = true;
+  private camOn = true;
+  private lastRender = 0;
+  invites: InviteRow[] = [];
+
+  constructor(private account: AccountStore, private deps: OnlineDeps) {}
+
+  get inRoom() { return !!this.room; }
+  get uid() { return this.account.uid; }
+
+  /** May this device's player inhale right now? (always true outside a room) */
+  canPlay(): boolean {
+    if (!this.room || !this.uid) return true;
+    return canPlay(this.room.match, this.uid, Date.now());
+  }
+
+  /** Text for the hint line while waiting for your turn. */
+  waitingText(): string | null {
+    const r = this.room;
+    if (!r || !this.uid) return null;
+    const m = r.match;
+    if (m.phase === 'lobby') return r.isAuthority ? 'Invite friends, then press Start in the room panel.' : 'Waiting for the host to start…';
+    if (m.phase === 'finished') return 'Game over! See the results in the room panel.';
+    if (m.mode === 'live' && Date.now() >= m.endsAt) return 'Time’s up!';
+    const holder = activePlayer(m);
+    if (holder && holder !== this.uid) return `${r.name(holder)} has the hookah… watch their tile!`;
+    return null;
+  }
+
+  // ------------------------------------------------------------------ lobby
+  openLobby(): void {
+    if (!this.account.signedIn) { showAuth(this.account, 'signin', 'Sign in to play online with friends.'); return; }
+    if (!this.account.profile) { showUsername(this.account, true); return; }
+    if (this.room) { this.deps.toast('You are already in a room: see the room panel.'); return; }
+    const m = openModal('🌐 Play online', { wide: true });
+    const st = status();
+    let mode: MatchMode = 'pass', challenge: Challenge = 'score', rounds = 3, max = 5;
+    const sel = <T extends string | number>(opts: [T, string][], get: () => T, set: (v: T) => void) => {
+      const el = h('div', { class: 'seg small' });
+      const draw = () => el.replaceChildren(...opts.map(([v, l]) => h('button', { type: 'button', class: get() === v ? 'sel' : '', onclick: () => { set(v); draw(); } }, l)));
+      draw(); return el;
+    };
+    const code = h('input', { type: 'text', placeholder: 'ROOM CODE', maxLength: 8, autocapitalize: 'characters', autocomplete: 'off', spellcheck: false, class: 'codeInput' });
+    code.addEventListener('input', () => { code.value = code.value.toUpperCase().replace(/[^A-Z2-9]/g, ''); });
+    const invitesBox = h('div', { class: 'list' });
+    const drawInvites = async () => {
+      try { this.invites = await api.myInvites(); } catch { /* ignore */ }
+      invitesBox.replaceChildren(...(this.invites.length ? this.invites.map(i => h('div', { class: 'urow' },
+        h('span', { class: 'av' }, i.from_avatar), h('div', { class: 'uname' }, h('b', {}, `${i.from_username} invited you`), h('small', {}, `${i.players}/${i.max_players} players · ${CHALLENGE_LABEL[i.challenge as Challenge] ?? i.challenge}`)),
+        h('div', { class: 'uact' },
+          h('button', { class: 'primary', onclick: () => void this.join(i.code, m, st) }, 'Join'),
+          h('button', { onclick: async () => { await api.declineInvite(i.invite_id).catch(() => {}); void drawInvites(); } }, 'Decline'))))
+        : [h('p', { class: 'dim' }, 'No invites right now.')]));
+    };
+
+    m.body.append(
+      h('div', { class: 'cols' },
+        h('section', {},
+          h('h3', {}, 'Create a room'),
+          h('label', {}, 'Mode'), sel<MatchMode>([['pass', MODE_LABEL.pass], ['live', MODE_LABEL.live]], () => mode, v => { mode = v; }),
+          h('label', {}, 'Challenge'), sel<Challenge>([['score', 'Score'], ['rings', 'Rings'], ['hold', 'Hold'], ['tricks', 'Tricks']], () => challenge, v => { challenge = v; }),
+          h('label', {}, 'Rounds'), sel<number>([[1, '1'], [2, '2'], [3, '3'], [5, '5']], () => rounds, v => { rounds = v; }),
+          h('label', {}, 'Max players'), sel<number>([[2, '2'], [3, '3'], [4, '4'], [5, '5']], () => max, v => { max = v; }),
+          h('button', { class: 'primary big', onclick: async () => {
+            try { const r = await api.createRoom(mode, challenge, rounds, max); await this.enter(r.id); m.close(); }
+            catch (e) { st.set(friendlyError(e), 'err'); }
+          } }, 'Create room')),
+        h('section', {},
+          h('h3', {}, 'Join with a code'),
+          h('form', { class: 'row', onsubmit: (e: Event) => { e.preventDefault(); void this.join(code.value, m, st); } }, code, h('button', { class: 'primary', type: 'submit' }, 'Join')),
+          h('h3', {}, 'Invites'), invitesBox)),
+      st.el,
+      h('p', { class: 'fine' }, '🎥 Video calls go straight between your devices and are never recorded or stored.'));
+    void drawInvites();
+  }
+
+  async join(code: string, modal?: { close(): void }, st?: { set(t: string, k?: 'ok' | 'err' | 'info'): void }): Promise<void> {
+    try {
+      const id = await api.joinRoom(code);
+      await this.enter(id);
+      modal?.close();
+    } catch (e) {
+      if (st) st.set(friendlyError(e), 'err'); else this.deps.toast(friendlyError(e));
+    }
+  }
+
+  async enter(roomId: string): Promise<void> {
+    if (!this.uid) return;
+    const room = new RoomClient(this.uid, {
+      changed: () => this.render(),
+      toast: t => this.deps.toast(t),
+      remoteStream: (u, s) => this.setTile(u, s),
+      matchEvent: (e, before, after) => this.onMatch(e, before, after)
+    });
+    this.room = room;
+    try { await room.enter(roomId); }
+    catch (e) { this.room = null; throw e; }
+    this.deps.log(`joined room ${room.state?.code}`);
+    this.deps.enteredRoom();
+    history.replaceState(null, '', `${location.pathname}?room=${room.state?.code}`);
+    this.render();
+    this.deps.layout();
+  }
+
+  async leave(): Promise<void> {
+    const r = this.room;
+    if (!r) return;
+    this.stopCall();
+    await r.leave();
+    this.room = null;
+    this.tiles.replaceChildren(); this.tileEls.clear();
+    history.replaceState(null, '', location.pathname);
+    this.render();
+    this.deps.leftRoom();
+    this.deps.layout();
+  }
+
+  // --------------------------------------------------------------- game hooks
+  /** The local player's run changed. */
+  runUpdated(run: RunStats, hitEnded: boolean): void {
+    const r = this.room;
+    if (!r || r.match.phase !== 'playing') return;
+    r.sendStats(run);
+    if (hitEnded && r.match.mode === 'pass' && activePlayer(r.match) === this.uid) r.turnDone();
+  }
+
+  tick(now: number): void {
+    this.room?.tick(now);
+    if (this.room && now - this.lastRender > 500) { this.lastRender = now; this.renderStatus(); }
+  }
+
+  private onMatch(e: MatchEvent, before: MatchState, after: MatchState) {
+    const r = this.room!;
+    if (e.type === 'start') {
+      this.deps.matchStarted(r.id!);
+      this.deps.banner(after.mode === 'live'
+        ? `⚡ Go! ${CHALLENGE_LABEL[after.challenge]} · ${after.rounds * LIVE_ROUND_SECONDS}s`
+        : `🪈 ${activePlayer(after) === this.uid ? 'You start' : r.name(activePlayer(after)!) + ' starts'}: ${CHALLENGE_LABEL[after.challenge]}`, 2600);
+    }
+    if (after.phase === 'playing' && after.mode === 'pass' && activePlayer(after) !== activePlayer(before)) {
+      const holder = activePlayer(after)!;
+      this.deps.banner(holder === this.uid ? '🪈 Your turn! Pen to your lips…' : `🪈 ${r.name(holder)} has the hookah`, 2000);
+    }
+    if (before.phase === 'playing' && after.phase === 'finished') {
+      const top = standings(after)[0];
+      this.deps.banner(top ? `🏆 ${top.user === this.uid ? 'You win' : r.name(top.user) + ' wins'}!` : 'Game over', 3500);
+      this.deps.matchFinished();
+    }
+  }
+
+  // ------------------------------------------------------------------- call
+  async startCall(): Promise<void> {
+    const r = this.room;
+    if (!r) return;
+    try {
+      this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) {
+      this.deps.toast('Microphone blocked: you can still be seen, but not heard.');
+      this.mic = null;
+    }
+    const video = this.callCanvas.captureStream(20);
+    this.outStream = new MediaStream([...video.getVideoTracks(), ...(this.mic?.getAudioTracks() ?? [])]);
+    this.micOn = !!this.mic; this.camOn = true;
+    await r.joinCall(this.outStream);
+    this.deps.log('joined the call');
+    this.render(); this.deps.layout();
+  }
+
+  stopCall(): void {
+    this.room?.leaveCall();
+    this.mic?.getTracks().forEach(t => t.stop());
+    this.outStream?.getVideoTracks().forEach(t => t.stop());
+    this.mic = null; this.outStream = null;
+    for (const [u] of this.tileEls) this.setTile(u, null);
+    this.render(); this.deps.layout();
+  }
+
+  get inCall() { return !!this.room?.callActive; }
+
+  /** Draw this frame of the stage into the outgoing call video. */
+  composite(layers: Layer[], W: number, H: number): void {
+    if (!this.inCall) return;
+    const cw = 640, ch = Math.round(640 * H / W);
+    if (this.callCanvas.width !== cw || this.callCanvas.height !== ch) { this.callCanvas.width = cw; this.callCanvas.height = ch; }
+    const g = this.callCtx;
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = '#000'; g.fillRect(0, 0, cw, ch);
+    if (!this.camOn) {
+      g.fillStyle = '#fff'; g.font = '28px system-ui'; g.textAlign = 'center';
+      g.fillText(`${this.account.profile?.avatar ?? '🙂'} camera off`, cw / 2, ch / 2);
+      return;
+    }
+    for (const l of layers) {
+      if (l.visible === false) continue;
+      g.save();
+      g.globalCompositeOperation = l.blend ?? 'source-over';
+      if (l.mirror) { g.translate(cw, 0); g.scale(-1, 1); }
+      g.drawImage(l.src, 0, 0, cw, ch);
+      g.restore();
+    }
+  }
+
+  private setTile(user: string, stream: MediaStream | null) {
+    let tile = this.tileEls.get(user);
+    if (!stream) { tile?.remove(); this.tileEls.delete(user); this.deps.layout(); return; }
+    if (!tile) {
+      const video = h('video', { autoplay: true, playsInline: true });
+      tile = h('div', { class: 'tile', 'data-user': user }, video, h('div', { class: 'tileLabel' }));
+      this.tiles.append(tile);
+      this.tileEls.set(user, tile);
+      this.deps.layout();
+    }
+    const v = tile.querySelector('video')!;
+    if (v.srcObject !== stream) { v.srcObject = stream; void v.play().catch(() => {}); }
+    this.renderTiles();
+  }
+
+  // ------------------------------------------------------------------ render
+  render(): void {
+    const r = this.room;
+    document.body.classList.toggle('inRoom', !!r);
+    document.body.classList.toggle('inCall', this.inCall && this.tileEls.size > 0);
+    this.panel.hidden = !r;
+    if (!r || !r.state) { this.panel.replaceChildren(); return; }
+    const s = r.state, m = r.match, me = this.uid!;
+    const auth = r.isAuthority;
+    const link = `${location.origin}${location.pathname}?room=${s.code}`;
+
+    const members = h('div', { class: 'list' }, ...s.members.map(mem => {
+      const here = r.present.get(mem.user_id);
+      const stats = mem.user_id === me ? null : r.remoteStats.get(mem.user_id);
+      const val = m.phase !== 'lobby' ? (m.stats[mem.user_id] ?? stats) : null;
+      return h('div', { class: 'urow' + (activePlayer(m) === mem.user_id ? ' holding' : '') },
+        h('span', { class: 'av' }, mem.avatar),
+        h('div', { class: 'uname' }, h('b', {}, mem.username + (mem.user_id === me ? ' (you)' : '')),
+          h('small', {}, [here ? '🟢 here' : '⚪ away', here?.inCall ? '🎥' : '', mem.user_id === s.host_id ? '👑 host' : '', activePlayer(m) === mem.user_id ? '🪈 has the hookah' : ''].filter(Boolean).join(' · '))),
+        val ? h('b', { class: 'metric' }, String(metric(m.challenge, val))) : '');
+    }));
+
+    const settings = m.phase === 'lobby' && s.host_id === me ? h('div', {},
+      h('label', {}, 'Mode'), this.segBtns<MatchMode>([['pass', '🪈 Turns'], ['live', '⚡ Live']], s.mode, v => void r.configure({ mode: v })),
+      h('label', {}, 'Challenge'), this.segBtns<Challenge>([['score', 'Score'], ['rings', 'Rings'], ['hold', 'Hold'], ['tricks', 'Tricks']], s.challenge, v => void r.configure({ challenge: v })),
+      h('label', {}, 'Rounds'), this.segBtns<number>([[1, '1'], [2, '2'], [3, '3'], [5, '5']], s.rounds, v => void r.configure({ rounds: v })))
+      : h('p', { class: 'hintTxt' }, `${MODE_LABEL[s.mode]} · ${CHALLENGE_LABEL[s.challenge]} · ${s.rounds} round${s.rounds > 1 ? 's' : ''}`);
+
+    const results = m.phase === 'finished' ? h('div', { class: 'results' }, h('h3', {}, '🏆 Results'),
+      ...standings(m).map(row => h('div', { class: 'urow' + (row.user === me ? ' me' : '') },
+        h('span', { class: 'av' }, row.place === 1 ? '🥇' : row.place === 2 ? '🥈' : row.place === 3 ? '🥉' : String(row.place)),
+        h('div', { class: 'uname' }, h('b', {}, r.name(row.user)), h('small', {}, `${row.stats.score} pts · ⭕${row.stats.rings} · ${row.stats.longestHold.toFixed(1)}s · ${row.stats.tricks} tricks`)),
+        h('b', { class: 'metric' }, String(row.value))))) : '';
+
+    this.panel.replaceChildren(
+      h('div', { class: 'roomHead' },
+        h('div', {}, h('small', { class: 'dim' }, 'ROOM'), h('div', { class: 'roomCode' }, s.code)),
+        h('button', { onclick: async () => {
+          try {
+            if (navigator.share) await navigator.share({ title: 'Virtual Hookah', text: `Join my Virtual Hookah room ${s.code}`, url: link });
+            else { await navigator.clipboard.writeText(link); this.deps.toast('Invite link copied'); }
+          } catch { /* cancelled */ }
+        } }, '🔗 Share link')),
+      h('div', { class: 'roomStatus', id: 'roomStatus' }),
+      h('h3', {}, `Players (${s.members.length}/${s.max_players})`), members,
+      h('div', { class: 'row' },
+        h('button', { onclick: () => showFriends(this.account, { invite: async (uid) => { await api.inviteToRoom(s.id, uid); } }) }, '➕ Invite friends'),
+        this.inCall ? null : h('button', { class: 'primary', onclick: () => void this.startCall() }, '🎥 Join call')),
+      this.inCall ? h('div', { class: 'row' },
+        h('button', { class: this.micOn ? '' : 'on', onclick: () => { this.micOn = !this.micOn; this.mic?.getAudioTracks().forEach(t => { t.enabled = this.micOn; }); this.render(); } }, this.micOn ? '🎙️ Mute' : '🔇 Unmute'),
+        h('button', { class: this.camOn ? '' : 'on', onclick: () => { this.camOn = !this.camOn; this.render(); } }, this.camOn ? '📷 Camera off' : '📷 Camera on'),
+        h('button', { onclick: () => this.stopCall() }, '📞 Leave call')) : '',
+      h('h3', {}, 'Game'), settings,
+      m.phase === 'lobby' && auth ? h('button', { class: 'primary big', disabled: r.present.size < 2, onclick: async () => {
+        try { await r.start(); } catch (e) { this.deps.toast(friendlyError(e)); }
+      } }, r.present.size < 2 ? 'Waiting for players…' : '▶ Start game') : '',
+      results,
+      m.phase === 'finished' && auth ? h('button', { class: 'primary', onclick: () => void r.backToLobby() }, '🔁 Play again') : '',
+      h('div', { class: 'reactions' }, ...REACTIONS.map(e => h('button', { onclick: () => r.react(e) }, e))),
+      h('button', { class: 'leaveBtn', onclick: () => { if (confirm('Leave this room?')) void this.leave(); } }, '🚪 Leave room'));
+    this.renderStatus();
+    this.renderTiles();
+  }
+
+  private renderStatus() {
+    const el = document.getElementById('roomStatus');
+    const r = this.room;
+    if (!el || !r) return;
+    const m = r.match;
+    let text = '';
+    if (m.phase === 'lobby') text = r.present.size < 2 ? 'Share the code or invite friends to start.' : `${r.present.size} players here.`;
+    else if (m.phase === 'playing' && m.mode === 'live') text = `⚡ ${Math.max(0, Math.ceil((m.endsAt - Date.now()) / 1000))}s left`;
+    else if (m.phase === 'playing') text = `Round ${m.round}/${m.rounds} · 🪈 ${activePlayer(m) === this.uid ? 'your turn' : r.name(activePlayer(m)!)}`;
+    else text = 'Game over';
+    el.textContent = text;
+  }
+
+  private renderTiles() {
+    const r = this.room;
+    if (!r) return;
+    for (const [u, tile] of this.tileEls) {
+      const mem = r.members.find(x => x.user_id === u);
+      const st = r.match.stats[u] ?? r.remoteStats.get(u);
+      const holding = activePlayer(r.match) === u;
+      tile.classList.toggle('holding', holding);
+      tile.querySelector('.tileLabel')!.textContent = `${mem?.avatar ?? '🙂'} ${mem?.username ?? 'player'}${st && r.match.phase !== 'lobby' ? ' · ' + metric(r.match.challenge, st) : ''}${holding ? ' · 🪈' : ''}`;
+    }
+  }
+
+  private segBtns<T extends string | number>(opts: [T, string][], cur: T, set: (v: T) => void) {
+    return h('div', { class: 'seg small' }, ...opts.map(([v, l]) => h('button', { class: cur === v ? 'sel' : '', onclick: () => set(v) }, l)));
+  }
+}
